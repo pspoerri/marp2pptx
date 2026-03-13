@@ -1,7 +1,7 @@
 BINARY := marp2pptx
 MODULE := github.com/pascal/marp2pptx
 
-.PHONY: build test test-verbose lint fmt vet clean run
+.PHONY: build test test-verbose lint fmt vet clean run install-hooks
 
 build:
 	go build -o $(BINARY) .
@@ -32,3 +32,6 @@ clean:
 
 run: build
 	./$(BINARY) $(ARGS)
+
+install-hooks:
+	git config core.hooksPath githooks

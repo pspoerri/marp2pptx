@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Run gofmt on staged .go files and re-stage any formatting changes.
+
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+[ -z "$staged" ] && exit 0
+
+gofmt -w $staged
+git add $staged

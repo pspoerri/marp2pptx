@@ -43,12 +43,15 @@ The pipeline is: **Marp parser → Markdown converter → PPTX writer**
 ## Development
 
 ```bash
+make install-hooks  # set up git hooks (run once after cloning)
 make test           # run all tests
 make test-verbose   # verbose test output
 make lint           # vet + format check
 make fmt            # format all Go files
 make clean          # remove binary and generated pptx files
 ```
+
+A pre-commit hook automatically formats staged `.go` files with `gofmt`.
 
 ## License
 
