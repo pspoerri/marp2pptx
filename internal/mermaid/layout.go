@@ -9,12 +9,28 @@ const (
 	nodeGapX = emuPerInch / 2 // horizontal gap between nodes
 	nodeGapY = emuPerInch / 2 // vertical gap between nodes
 
+	// Label sizing (must match pptx render constants)
+	emuPerPoint    = emuPerInch / 72 // 12700
+	labelCharW     = emuPerPoint * 8 // char width in edge labels (flowchart/state/class)
+	labelBaseW     = emuPerInch / 4  // base padding on label width
+	labelH         = emuPerInch / 4  // standard label height (0.25")
+	erCardLabelW   = emuPerInch / 2  // ER cardinality label width (0.5")
+	erRelLabelChrW = emuPerPoint * 7 // char width in ER relationship labels
+
 	// Sequence diagram sizing
 	seqParticipantW   = emuPerInch * 3 / 2 // 1.5 inches
 	seqParticipantH   = emuPerInch / 2     // 0.5 inches
 	seqParticipantGap = emuPerInch / 2     // gap between participants
 	seqMessageGap     = emuPerInch / 2     // vertical gap between messages
 )
+
+// edgeLabelWidth returns the rendered width of an edge label.
+func edgeLabelWidth(label string) int {
+	if label == "" {
+		return 0
+	}
+	return len(label)*labelCharW + labelBaseW
+}
 
 // ComputeLayout assigns positions to all nodes and edges in the graph.
 // The layout fits within the given bounding box (maxW x maxH in EMU).
@@ -87,23 +103,55 @@ func computeFlowchartLayout(g Graph, maxW, maxH int) Layout {
 
 	nw, nh := fitNodeSize(numLayers, maxPerLayer, horizontal, maxW, maxH)
 
+	// Compute maximum edge label dimensions for gap sizing.
+	// Labels are rendered at edge midpoints; gaps must be large enough
+	// so labels don't overlap adjacent nodes.
+	maxLabelW := 0
+	hasLabels := false
+	for _, e := range g.Edges {
+		if e.Label != "" {
+			hasLabels = true
+			if w := edgeLabelWidth(e.Label); w > maxLabelW {
+				maxLabelW = w
+			}
+		}
+	}
+
 	var gapMain, gapCross int
 	if horizontal {
 		gapMain = (maxW - numLayers*nw) / (numLayers + 1)
-		if gapMain < nodeGapX/4 {
-			gapMain = nodeGapX / 4
+		minGap := nodeGapX / 4
+		// For LR/RL: labels need horizontal space between layers
+		if hasLabels && maxLabelW+nodeGapX/8 > minGap {
+			minGap = maxLabelW + nodeGapX/8
+		}
+		if gapMain < minGap {
+			gapMain = minGap
 		}
 	} else {
 		gapMain = (maxH - numLayers*nh) / (numLayers + 1)
-		if gapMain < nodeGapY/4 {
-			gapMain = nodeGapY / 4
+		minGap := nodeGapY / 4
+		// For TD/BT: labels need vertical space between layers
+		if hasLabels && labelH+nodeGapY/8 > minGap {
+			minGap = labelH + nodeGapY/8
+		}
+		if gapMain < minGap {
+			gapMain = minGap
 		}
 	}
 
 	if horizontal {
 		gapCross = nodeGapY / 2
+		// Labels at branch points need vertical separation
+		if hasLabels && labelH+nodeGapY/8 > gapCross {
+			gapCross = labelH + nodeGapY/8
+		}
 	} else {
 		gapCross = nodeGapX / 2
+		// Labels at branch points need horizontal separation
+		if hasLabels && maxLabelW/2+nodeGapX/8 > gapCross {
+			gapCross = maxLabelW/2 + nodeGapX/8
+		}
 	}
 
 	layoutNodes := make([]LayoutNode, len(g.Nodes))

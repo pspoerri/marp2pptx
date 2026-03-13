@@ -119,6 +119,23 @@ func computeClassLayout(g Graph, maxW, maxH int) Layout {
 
 	numLayers := maxLayer + 1
 
+	// Compute effective gaps that include space for relation labels.
+	// Labels are rendered at edge midpoints; the gap between layers
+	// must be large enough for the label text not to overlap nodes.
+	gapX := classGapX
+	gapY := classGapY
+	for _, rel := range cd.Relations {
+		if rel.Label != "" {
+			lw := edgeLabelWidth(rel.Label)
+			if lw/2+classGapX/4 > gapX {
+				gapX = lw/2 + classGapX/4
+			}
+		}
+	}
+	if labelH+classGapY/4 > gapY {
+		gapY = labelH + classGapY/4
+	}
+
 	// Compute max width and height per layer
 	layerMaxH := make([]int, numLayers)
 	layerTotalW := make([]int, numLayers)
@@ -129,7 +146,7 @@ func computeClassLayout(g Graph, maxW, maxH int) Layout {
 			}
 			layerTotalW[layer] += nodeSizes[idx].w
 			if i > 0 {
-				layerTotalW[layer] += classGapX
+				layerTotalW[layer] += gapX
 			}
 		}
 	}
@@ -139,7 +156,7 @@ func computeClassLayout(g Graph, maxW, maxH int) Layout {
 	for _, h := range layerMaxH {
 		totalH += h
 	}
-	totalH += (numLayers - 1) * classGapY
+	totalH += (numLayers - 1) * gapY
 	scaleH := 1.0
 	if totalH > maxH {
 		scaleH = float64(maxH) / float64(totalH)
@@ -172,7 +189,7 @@ func computeClassLayout(g Graph, maxW, maxH int) Layout {
 		for i, idx := range indices {
 			totalW += int(float64(nodeSizes[idx].w) * scale)
 			if i > 0 {
-				totalW += int(float64(classGapX) * scale)
+				totalW += int(float64(gapX) * scale)
 			}
 		}
 		startX := (maxW - totalW) / 2
@@ -191,9 +208,9 @@ func computeClassLayout(g Graph, maxW, maxH int) Layout {
 				HeaderH:  hdrH,
 				RowH:     rowMemberH,
 			}
-			curX += w + int(float64(classGapX)*scale)
+			curX += w + int(float64(gapX)*scale)
 		}
-		curY += rowH + int(float64(classGapY)*scale)
+		curY += rowH + int(float64(gapY)*scale)
 	}
 
 	// Build relation layouts

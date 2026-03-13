@@ -133,6 +133,35 @@ stateDiagram-v2
 
 ---
 
+## State Diagram (Movement)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Still
+    Still --> [*]
+    Still --> Moving
+    Moving --> Still
+    Moving --> Crash
+    Crash --> [*]
+```
+
+---
+
+## State Diagram (Aliases)
+
+```mermaid
+stateDiagram-v2
+    state "First State" as First
+    state "Named Composite" as Named
+    state "Simple State" as Simple
+    [*] --> First
+    First --> Named
+    Named --> Simple
+    Simple --> [*]
+```
+
+---
+
 ## User Journey
 
 ```mermaid

@@ -55,14 +55,27 @@ func computeERLayout(g Graph, maxW, maxH int) Layout {
 		}
 	}
 
-	// Use force-directed algorithm to compute entity positions
-	pos := forceDirectedPositions(n, edges, widths, heights, maxW, maxH)
+	// Virtual bounding boxes: inflate entity sizes to reserve space for
+	// cardinality labels and relationship labels rendered near entities.
+	virtualW := make([]int, n)
+	virtualH := make([]int, n)
+	maxRelLabelW := 0
+	for _, rel := range er.Relationships {
+		if rel.Label != "" {
+			if w := len(rel.Label)*erRelLabelChrW + labelBaseW; w > maxRelLabelW {
+				maxRelLabelW = w
+			}
+		}
+	}
+	for i := 0; i < n; i++ {
+		virtualW[i] = widths[i] + erCardLabelW + maxRelLabelW/3
+		virtualH[i] = heights[i] + labelH
+	}
 
-	// Push apart any remaining overlaps
-	resolveNodeOverlaps(pos, widths, heights, erGapX/2)
-
-	// Scale and center to fit bounding box
-	scale := fitPositionsToBox(pos, widths, heights, maxW, maxH, erGapX/2)
+	// Use virtual sizes for force-directed layout (ensures label clearance)
+	pos := forceDirectedPositions(n, edges, virtualW, virtualH, maxW, maxH)
+	resolveNodeOverlaps(pos, virtualW, virtualH, erGapX/4)
+	scale := fitPositionsToBox(pos, virtualW, virtualH, maxW, maxH, erGapX/4)
 	if scale > 1 {
 		scale = 1
 	}
