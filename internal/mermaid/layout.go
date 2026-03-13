@@ -138,6 +138,13 @@ func computeFlowchartLayout(g Graph, maxW, maxH int) Layout {
 		}
 	}
 
+	// Refine cross-axis positions using median-based alignment
+	crossMax := maxW
+	if horizontal {
+		crossMax = maxH
+	}
+	refineCrossPositions(layoutNodes, layerNodes, adj, radj, maxLayer, horizontal, crossMax)
+
 	layoutEdges := make([]LayoutEdge, len(g.Edges))
 	for i, e := range g.Edges {
 		var from, to LayoutNode
@@ -245,7 +252,7 @@ func buildReverseAdj(g Graph, nodeIndex map[string]int) [][]int {
 // reorderLayersBarycenter reorders nodes within each layer using the
 // barycenter heuristic to reduce edge crossings.
 func reorderLayersBarycenter(layerNodes map[int][]int, adj, radj [][]int, maxLayer int) {
-	for sweep := 0; sweep < 4; sweep++ {
+	for sweep := 0; sweep < 8; sweep++ {
 		// Forward sweep: order by average position of predecessors
 		for layer := 1; layer <= maxLayer; layer++ {
 			posMap := make(map[int]int)
