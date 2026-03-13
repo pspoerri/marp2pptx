@@ -575,9 +575,146 @@ func renderDiagramNode(ln mermaid.LayoutNode, id, offX, offY int) string {
 `, id, escapeXML(ln.ID), offX+ln.X, offY+ln.Y, ln.W, ln.H, prst, halfPt(fontSize), escapeXML(ln.Label))
 }
 
+// backEdgeOffset is the horizontal routing offset for back-edges (1/3 inch).
+const backEdgeOffset = emuPerInch / 3
+
+// isBackEdge returns true if the edge goes "upward" (target above source)
+// and the two nodes overlap horizontally, meaning a straight connector
+// would pass through intermediate nodes.
+func isBackEdge(from, to mermaid.LayoutNode) bool {
+	fromCY := from.Y + from.H/2
+	toCY := to.Y + to.H/2
+	if toCY >= fromCY {
+		return false
+	}
+	// Check horizontal overlap
+	overlapL := from.X
+	if to.X > overlapL {
+		overlapL = to.X
+	}
+	overlapR := from.X + from.W
+	if to.X+to.W < overlapR {
+		overlapR = to.X + to.W
+	}
+	return overlapR > overlapL
+}
+
+// renderBackEdgeShape renders a back-edge that routes around the right side
+// of intermediate nodes using a custom geometry path with rounded corners.
+func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
+	from := le.FromNode
+	to := le.ToNode
+
+	// Connect from right side of source to right side of target
+	startX := from.X + from.W
+	startY := from.Y + from.H/2
+	endX := to.X + to.W
+	endY := to.Y + to.H/2
+
+	rightMax := startX
+	if endX > rightMax {
+		rightMax = endX
+	}
+	routeX := rightMax + backEdgeOffset
+
+	// Bounding box
+	bbX := startX
+	if endX < bbX {
+		bbX = endX
+	}
+	bbY := endY // endY < startY for back-edges
+	bbCX := routeX - bbX
+	bbCY := startY - endY
+
+	// Path coordinates relative to bounding box
+	p1x := startX - bbX
+	p1y := bbCY // bottom
+	p2x := bbCX // right edge
+	p2y := bbCY
+	p3x := bbCX
+	p3y := 0
+	p4x := endX - bbX
+	p4y := 0
+
+	// Corner radius
+	r := emuPerInch / 8
+	if r > bbCX/3 {
+		r = bbCX / 3
+	}
+	if r > bbCY/6 {
+		r = bbCY / 6
+	}
+
+	// Line style
+	lineW := 12700 // 1pt
+	dashXML := ""
+	switch le.Style {
+	case mermaid.EdgeDotted:
+		dashXML = `<a:prstDash val="dash"/>`
+	case mermaid.EdgeThick:
+		lineW = 25400 // 2pt
+	}
+
+	tailEnd := ""
+	if le.Arrow {
+		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
+	}
+
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="BackEdge %d"/>
+          <p:cNvSpPr/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:custGeom>
+            <a:avLst/>
+            <a:gdLst/>
+            <a:ahLst/>
+            <a:cxnLst/>
+            <a:rect l="0" t="0" r="0" b="0"/>
+            <a:pathLst>
+              <a:path w="%d" h="%d">
+                <a:moveTo><a:pt x="%d" y="%d"/></a:moveTo>
+                <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
+                <a:quadBezTo><a:pt x="%d" y="%d"/><a:pt x="%d" y="%d"/></a:quadBezTo>
+                <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
+                <a:quadBezTo><a:pt x="%d" y="%d"/><a:pt x="%d" y="%d"/></a:quadBezTo>
+                <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
+              </a:path>
+            </a:pathLst>
+          </a:custGeom>
+          <a:noFill/>
+          <a:ln w="%d">
+            <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
+            %s%s
+          </a:ln>
+        </p:spPr>
+      </p:sp>
+`, id, id,
+		offX+bbX, offY+bbY, bbCX, bbCY,
+		bbCX, bbCY,
+		p1x, p1y, // moveTo: start at source right edge
+		p2x-r, p2y, // lineTo: approach bottom-right corner
+		p2x, p2y, p2x, p2y-r, // quadBezTo: round bottom-right corner
+		p3x, p3y+r, // lineTo: go up, approach top-right corner
+		p3x, p3y, p3x-r, p3y, // quadBezTo: round top-right corner
+		p4x, p4y, // lineTo: go left to target right edge
+		lineW, dashXML, tailEnd)
+}
+
 func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toShapeID int) string {
 	from := le.FromNode
 	to := le.ToNode
+
+	// Route back-edges around the side to avoid passing through intermediate nodes
+	if isBackEdge(from, to) {
+		return renderBackEdgeShape(le, id, offX, offY)
+	}
 
 	x1, y1, x2, y2 := computeConnectionPoints(
 		from.X, from.Y, from.W, from.H,
@@ -659,21 +796,37 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
 	from := le.FromNode
 	to := le.ToNode
 
-	// Compute actual connection points for accurate midpoint
-	cx1, cy1, cx2, cy2 := computeConnectionPoints(
-		from.X, from.Y, from.W, from.H,
-		to.X, to.Y, to.W, to.H,
-	)
-	midX := offX + (cx1+cx2)/2
-	midY := offY + (cy1+cy2)/2
-
 	labelW := len(le.Label)*emuPerPoint*8 + emuPerInch/4
 	lH := emuPerInch / 4
 
-	// Offset perpendicular to edge so label doesn't overlap the connector
-	edgeDX := cx2 - cx1
-	edgeDY := cy2 - cy1
-	dx, dy := labelOffset(edgeDX, edgeDY, labelW, lH)
+	var labelX, labelY int
+
+	if isBackEdge(from, to) {
+		// Position label at midpoint of the vertical routing segment
+		rightX := from.X + from.W
+		if to.X+to.W > rightX {
+			rightX = to.X + to.W
+		}
+		rightX += backEdgeOffset
+		midY := (from.Y + from.H/2 + to.Y + to.H/2) / 2
+		labelX = offX + rightX + emuPerInch/16
+		labelY = offY + midY - lH/2
+	} else {
+		// Compute actual connection points for accurate midpoint
+		cx1, cy1, cx2, cy2 := computeConnectionPoints(
+			from.X, from.Y, from.W, from.H,
+			to.X, to.Y, to.W, to.H,
+		)
+		midX := offX + (cx1+cx2)/2
+		midY := offY + (cy1+cy2)/2
+
+		// Offset perpendicular to edge so label doesn't overlap the connector
+		edgeDX := cx2 - cx1
+		edgeDY := cy2 - cy1
+		dx, dy := labelOffset(edgeDX, edgeDY, labelW, lH)
+		labelX = midX - labelW/2 + dx
+		labelY = midY - lH/2 + dy
+	}
 
 	return fmt.Sprintf(`      <p:sp>
         <p:nvSpPr>
@@ -687,7 +840,7 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
           <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-          <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+          <a:noFill/>
         </p:spPr>
         <p:txBody>
           <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
@@ -698,7 +851,7 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
           </a:p>
         </p:txBody>
       </p:sp>
-`, id, midX-labelW/2+dx, midY-lH/2+dy, labelW, lH, halfPt(10), escapeXML(le.Label))
+`, id, labelX, labelY, labelW, lH, halfPt(10), escapeXML(le.Label))
 }
 
 // ---------------------------------------------------------------------------
