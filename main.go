@@ -9,6 +9,7 @@ import (
 
 	"github.com/pspoerri/marp2pptx/internal/markdown"
 	"github.com/pspoerri/marp2pptx/internal/marp"
+	mermaidpkg "github.com/pspoerri/marp2pptx/internal/mermaid"
 	"github.com/pspoerri/marp2pptx/internal/pptx"
 )
 
@@ -72,6 +73,10 @@ func run(inputPath, outputPath string) error {
 		if err != nil {
 			return fmt.Errorf("converting markdown: %w", err)
 		}
+		blocks, err = renderMermaidDiagrams(blocks)
+		if err != nil {
+			return fmt.Errorf("rendering mermaid diagrams: %w", err)
+		}
 		resolveImages(blocks, baseDir)
 		slides = append(slides, pptx.SlideContent{
 			Blocks:     blocks,
@@ -92,11 +97,27 @@ func run(inputPath, outputPath string) error {
 	return nil
 }
 
+// renderMermaidDiagrams converts mermaid code blocks to Diagram content blocks.
+func renderMermaidDiagrams(blocks []markdown.ContentBlock) ([]markdown.ContentBlock, error) {
+	for i, block := range blocks {
+		cb, ok := block.(markdown.CodeBlock)
+		if !ok || cb.Language != "mermaid" {
+			continue
+		}
+		graph, err := mermaidpkg.Parse(cb.Code)
+		if err != nil {
+			return nil, fmt.Errorf("parsing mermaid diagram: %w", err)
+		}
+		blocks[i] = markdown.Diagram{Graph: graph}
+	}
+	return blocks, nil
+}
+
 // resolveImages reads local image files and attaches data to Image blocks.
 func resolveImages(blocks []markdown.ContentBlock, baseDir string) {
 	for i, block := range blocks {
 		img, ok := block.(markdown.Image)
-		if !ok || img.URL == "" {
+		if !ok || img.URL == "" || len(img.Data) > 0 {
 			continue
 		}
 		// Skip remote URLs

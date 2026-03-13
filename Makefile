@@ -1,7 +1,7 @@
 BINARY := marp2pptx
 MODULE := github.com/pspoerri/marp2pptx
 
-.PHONY: build test test-verbose lint fmt vet clean run install-hooks
+.PHONY: build test test-verbose test-integration lint fmt vet clean run install-hooks
 
 build:
 	go build -o $(BINARY) .
@@ -11,6 +11,9 @@ test:
 
 test-verbose:
 	go test -v ./...
+
+test-integration:
+	go test -v -run TestIntegration ./...
 
 test-run:
 	go test -v -run $(RUN) ./...

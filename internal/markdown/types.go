@@ -1,6 +1,10 @@
 package markdown
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/pspoerri/marp2pptx/internal/mermaid"
+)
 
 // BlockKind identifies the type of content block.
 type BlockKind int
@@ -14,6 +18,7 @@ const (
 	BlockTable
 	BlockThematicBreak
 	BlockDefinitionList
+	BlockDiagram
 )
 
 // ContentBlock is a piece of slide content.
@@ -119,3 +124,10 @@ type DefinitionItem struct {
 	Term         []Run
 	Descriptions [][]Run
 }
+
+// Diagram represents a parsed mermaid diagram rendered as native shapes.
+type Diagram struct {
+	Graph mermaid.Graph
+}
+
+func (d Diagram) BlockKind() BlockKind { return BlockDiagram }

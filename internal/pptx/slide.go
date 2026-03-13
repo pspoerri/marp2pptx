@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/pspoerri/marp2pptx/internal/markdown"
+	"github.com/pspoerri/marp2pptx/internal/mermaid"
 )
 
 // headingFontSizes maps heading levels to font sizes in points.
@@ -28,11 +29,13 @@ type ImageRef struct {
 
 // segment is a group of content blocks that share a shape.
 type segment struct {
-	isTable bool
-	isImage bool
-	blocks  []markdown.ContentBlock
-	table   markdown.Table
-	image   markdown.Image
+	isTable   bool
+	isImage   bool
+	isDiagram bool
+	blocks    []markdown.ContentBlock
+	table     markdown.Table
+	image     markdown.Image
+	diagram   markdown.Diagram
 }
 
 // splitSegments groups blocks into text segments, table segments, and image segments.
@@ -56,6 +59,12 @@ func splitSegments(blocks []markdown.ContentBlock) []segment {
 				}
 				segments = append(segments, segment{isImage: true, image: b})
 			}
+		case markdown.Diagram:
+			if len(textBlocks) > 0 {
+				segments = append(segments, segment{blocks: textBlocks})
+				textBlocks = nil
+			}
+			segments = append(segments, segment{isDiagram: true, diagram: b})
 		default:
 			textBlocks = append(textBlocks, block)
 		}
@@ -87,14 +96,20 @@ func generateSlideXML(blocks []markdown.ContentBlock, bgColor string, bgImageRef
 		y := marginTop + i*segHeight
 		if seg.isTable {
 			shapes.WriteString(renderTableFrame(seg.table, shapeID, marginLeft, y, contentWidth, segHeight))
+			shapeID++
 		} else if seg.isImage {
 			if ref, ok := fgRefMap[seg.image.URL]; ok {
 				shapes.WriteString(renderImageShape(ref, shapeID, marginLeft, y, contentWidth, segHeight))
 			}
+			shapeID++
+		} else if seg.isDiagram {
+			xml, nextID := renderDiagramShapes(seg.diagram, shapeID, marginLeft, y, contentWidth, segHeight)
+			shapes.WriteString(xml)
+			shapeID = nextID
 		} else {
 			shapes.WriteString(renderTextShape(seg.blocks, shapeID, marginLeft, y, contentWidth, segHeight))
+			shapeID++
 		}
-		shapeID++
 	}
 
 	bgXML := ""
@@ -443,6 +458,252 @@ func renderCodeBlock(cb markdown.CodeBlock) string {
 		sb.WriteString(renderParagraph([]markdown.Run{run}, 0, false))
 	}
 	return sb.String()
+}
+
+// renderDiagramShapes renders a mermaid diagram as native PPTX shapes.
+// Returns the XML and the next available shape ID.
+func renderDiagramShapes(d markdown.Diagram, startID, x, y, cx, cy int) (string, int) {
+	layout := mermaid.ComputeLayout(d.Graph, cx, cy)
+	var sb strings.Builder
+	id := startID
+
+	// Render nodes as shapes
+	nodeIDMap := make(map[string]int) // node ID -> shape ID for connector refs
+	for _, ln := range layout.Nodes {
+		nodeIDMap[ln.ID] = id
+		sb.WriteString(renderDiagramNode(ln, id, x, y))
+		id++
+	}
+
+	// Render edges as connector shapes
+	for _, le := range layout.Edges {
+		fromShapeID := nodeIDMap[le.From]
+		toShapeID := nodeIDMap[le.To]
+		sb.WriteString(renderDiagramEdge(le, id, x, y, fromShapeID, toShapeID))
+		id++
+		// If edge has a label, render it as a text box
+		if le.Label != "" {
+			sb.WriteString(renderEdgeLabel(le, id, x, y))
+			id++
+		}
+	}
+
+	return sb.String(), id
+}
+
+// prstGeomForShape maps mermaid node shapes to OOXML preset geometry names.
+func prstGeomForShape(s mermaid.NodeShape) string {
+	switch s {
+	case mermaid.ShapeRound:
+		return "roundRect"
+	case mermaid.ShapeDiamond:
+		return "diamond"
+	case mermaid.ShapeCircle:
+		return "ellipse"
+	case mermaid.ShapeStadium:
+		return "roundRect"
+	case mermaid.ShapeHexagon:
+		return "hexagon"
+	case mermaid.ShapeParallel:
+		return "parallelogram"
+	case mermaid.ShapeTrapezoid:
+		return "trapezoid"
+	default:
+		return "rect"
+	}
+}
+
+func renderDiagramNode(ln mermaid.LayoutNode, id, offX, offY int) string {
+	prst := prstGeomForShape(ln.Shape)
+	fontSize := 12
+	if len(ln.Label) > 20 {
+		fontSize = 10
+	}
+
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Node %s"/>
+          <p:cNvSpPr/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="%s"><a:avLst/></a:prstGeom>
+          <a:solidFill><a:srgbClr val="4472C4"/></a:solidFill>
+          <a:ln w="12700"><a:solidFill><a:srgbClr val="2F5496"/></a:solidFill></a:ln>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+            <a:r><a:rPr lang="en-US" sz="%d" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>%s</a:t></a:r>
+          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, escapeXML(ln.ID), offX+ln.X, offY+ln.Y, ln.W, ln.H, prst, halfPt(fontSize), escapeXML(ln.Label))
+}
+
+func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toShapeID int) string {
+	// Compute connection points (center of each node's edge)
+	from := le.FromNode
+	to := le.ToNode
+
+	// Determine which sides to connect based on relative position
+	var x1, y1, x2, y2 int
+	dx := (to.X + to.W/2) - (from.X + from.W/2)
+	dy := (to.Y + to.H/2) - (from.Y + from.H/2)
+
+	if abs(dx) > abs(dy) {
+		// Horizontal connection
+		if dx > 0 {
+			x1 = from.X + from.W
+			y1 = from.Y + from.H/2
+			x2 = to.X
+			y2 = to.Y + to.H/2
+		} else {
+			x1 = from.X
+			y1 = from.Y + from.H/2
+			x2 = to.X + to.W
+			y2 = to.Y + to.H/2
+		}
+	} else {
+		// Vertical connection
+		if dy > 0 {
+			x1 = from.X + from.W/2
+			y1 = from.Y + from.H
+			x2 = to.X + to.W/2
+			y2 = to.Y
+		} else {
+			x1 = from.X + from.W/2
+			y1 = from.Y
+			x2 = to.X + to.W/2
+			y2 = to.Y + to.H
+		}
+	}
+
+	// Apply segment offset
+	x1 += offX
+	y1 += offY
+	x2 += offX
+	y2 += offY
+
+	// Line style
+	lineW := 12700 // 1pt
+	dashXML := ""
+	switch le.Style {
+	case mermaid.EdgeDotted:
+		dashXML = `<a:prstDash val="dash"/>`
+	case mermaid.EdgeThick:
+		lineW = 25400 // 2pt
+	}
+
+	// Arrow head
+	tailEnd := ""
+	if le.Arrow {
+		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
+	}
+
+	// Use a freeform connector (two-point line)
+	// Compute bounding box
+	minX := min(x1, x2)
+	minY := min(y1, y2)
+	cxLine := abs(x2 - x1)
+	cyLine := abs(y2 - y1)
+	if cxLine == 0 {
+		cxLine = 1
+	}
+	if cyLine == 0 {
+		cyLine = 1
+	}
+
+	// Flip flags for connector
+	flipH := ""
+	flipV := ""
+	if x2 < x1 {
+		flipH = ` flipH="1"`
+	}
+	if y2 < y1 {
+		flipV = ` flipV="1"`
+	}
+
+	return fmt.Sprintf(`      <p:cxnSp>
+        <p:nvCxnSpPr>
+          <p:cNvPr id="%d" name="Connector %d"/>
+          <p:cNvCxnSpPr>
+            <a:stCxn id="%d" idx="0"/>
+            <a:endCxn id="%d" idx="0"/>
+          </p:cNvCxnSpPr>
+          <p:nvPr/>
+        </p:nvCxnSpPr>
+        <p:spPr>
+          <a:xfrm%s%s>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:ln w="%d">
+            <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
+            %s%s
+          </a:ln>
+        </p:spPr>
+      </p:cxnSp>
+`, id, id, fromShapeID, toShapeID,
+		flipH, flipV, minX, minY, cxLine, cyLine,
+		lineW, dashXML, tailEnd)
+}
+
+func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
+	// Place label at midpoint of the edge
+	from := le.FromNode
+	to := le.ToNode
+	midX := offX + (from.X+from.W/2+to.X+to.W/2)/2
+	midY := offY + (from.Y+from.H/2+to.Y+to.H/2)/2
+
+	labelW := len(le.Label)*emuPerPoint*8 + emuPerInch/4
+	labelH := emuPerInch / 4
+
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Label"/>
+          <p:cNvSpPr txBox="1"/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          <a:noFill/>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+            <a:r><a:rPr lang="en-US" sz="%d" dirty="0"/><a:t>%s</a:t></a:r>
+          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, midX-labelW/2, midY-labelH/2, labelW, labelH, halfPt(10), escapeXML(le.Label))
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func escapeXML(s string) string {
