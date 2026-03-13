@@ -5,7 +5,7 @@ Convert [Marp](https://marp.app/) Markdown presentations to PowerPoint (.pptx) f
 ## Install
 
 ```bash
-go install github.com/pascal/marp2pptx@latest
+go install github.com/pspoerri/marp2pptx@latest
 ```
 
 Or build from source:

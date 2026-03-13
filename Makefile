@@ -1,5 +1,5 @@
 BINARY := marp2pptx
-MODULE := github.com/pascal/marp2pptx
+MODULE := github.com/pspoerri/marp2pptx
 
 .PHONY: build test test-verbose lint fmt vet clean run install-hooks
 

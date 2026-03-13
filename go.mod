@@ -1,4 +1,4 @@
-module github.com/pascal/marp2pptx
+module github.com/pspoerri/marp2pptx
 
 go 1.25.5
 

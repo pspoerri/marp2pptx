@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pascal/marp2pptx/internal/markdown"
+	"github.com/pspoerri/marp2pptx/internal/markdown"
 )
 
 // headingFontSizes maps heading levels to font sizes in points.

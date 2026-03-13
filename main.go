@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pascal/marp2pptx/internal/markdown"
-	"github.com/pascal/marp2pptx/internal/marp"
-	"github.com/pascal/marp2pptx/internal/pptx"
+	"github.com/pspoerri/marp2pptx/internal/markdown"
+	"github.com/pspoerri/marp2pptx/internal/marp"
+	"github.com/pspoerri/marp2pptx/internal/pptx"
 )
 
 var version = "dev"

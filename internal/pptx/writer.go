@@ -12,8 +12,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/pascal/marp2pptx/internal/markdown"
-	"github.com/pascal/marp2pptx/internal/marp"
+	"github.com/pspoerri/marp2pptx/internal/markdown"
+	"github.com/pspoerri/marp2pptx/internal/marp"
 )
 
 // SlideContent holds the converted content for a single slide.
