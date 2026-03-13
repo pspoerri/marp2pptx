@@ -164,6 +164,8 @@ func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
 		flipV = ` flipV="1"`
 	}
 
+	geom := connectorGeom(cx, cy)
+
 	return fmt.Sprintf(`      <p:cxnSp>
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="Relation %d"/>
@@ -175,14 +177,14 @@ func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
             <a:off x="%d" y="%d"/>
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
-          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:prstGeom prst="%s"><a:avLst/></a:prstGeom>
           <a:ln w="%d">
             <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
             %s%s%s
           </a:ln>
         </p:spPr>
       </p:cxnSp>
-`, id, id, flipH, flipV, minX, minY, cx, cy, lineW, dashXML, headEnd, tailEnd)
+`, id, id, flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML, headEnd, tailEnd)
 }
 
 func markerToXML(marker mermaid.RelMarker, tag string) string {
@@ -203,11 +205,20 @@ func markerToXML(marker mermaid.RelMarker, tag string) string {
 func renderClassRelLabel(rel mermaid.ClassLayoutRelation, id, offX, offY int) string {
 	from := rel.FromNode
 	to := rel.ToNode
-	midX := offX + (from.X+from.W/2+to.X+to.W/2)/2
-	midY := offY + (from.Y+from.H/2+to.Y+to.H/2)/2
+
+	cx1, cy1, cx2, cy2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
+	midX := offX + (cx1+cx2)/2
+	midY := offY + (cy1+cy2)/2
 
 	labelW := len(rel.Label)*emuPerPoint*8 + emuPerInch/4
-	labelH := emuPerInch / 4
+	lH := emuPerInch / 4
+
+	edgeDX := cx2 - cx1
+	edgeDY := cy2 - cy1
+	dx, dy := labelOffset(edgeDX, edgeDY, labelW, lH)
 
 	return fmt.Sprintf(`      <p:sp>
         <p:nvSpPr>
@@ -221,7 +232,7 @@ func renderClassRelLabel(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
           <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-          <a:noFill/>
+          <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
         </p:spPr>
         <p:txBody>
           <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
@@ -232,7 +243,7 @@ func renderClassRelLabel(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
           </a:p>
         </p:txBody>
       </p:sp>
-`, id, midX-labelW/2, midY-labelH/2, labelW, labelH, halfPt(9), escapeXML(rel.Label))
+`, id, midX-labelW/2+dx, midY-lH/2+dy, labelW, lH, halfPt(9), escapeXML(rel.Label))
 }
 
 // computeConnectionPoints calculates the best edge attachment points between two boxes.

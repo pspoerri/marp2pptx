@@ -146,6 +146,8 @@ func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
 		flipV = ` flipV="1"`
 	}
 
+	geom := connectorGeom(cx, cy)
+
 	return fmt.Sprintf(`      <p:cxnSp>
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="ERRel %d"/>
@@ -157,14 +159,14 @@ func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
             <a:off x="%d" y="%d"/>
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
-          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:prstGeom prst="%s"><a:avLst/></a:prstGeom>
           <a:ln w="%d">
             <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
             %s
           </a:ln>
         </p:spPr>
       </p:cxnSp>
-`, id, id, flipH, flipV, minX, minY, cx, cy, lineW, dashXML)
+`, id, id, flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML)
 }
 
 func cardinalityText(c mermaid.ERCardinality) string {
@@ -280,11 +282,20 @@ func renderERCardLabel(rel mermaid.ERRelationshipLayout, id, offX, offY int, isF
 func renderERRelLabel(rel mermaid.ERRelationshipLayout, id, offX, offY int) string {
 	from := rel.FromEntity
 	to := rel.ToEntity
-	midX := offX + (from.X+from.W/2+to.X+to.W/2)/2
-	midY := offY + (from.Y+from.H/2+to.Y+to.H/2)/2
+
+	cx1, cy1, cx2, cy2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
+	midX := offX + (cx1+cx2)/2
+	midY := offY + (cy1+cy2)/2
 
 	labelW := len(rel.Label)*emuPerPoint*7 + emuPerInch/4
-	labelH := emuPerInch / 4
+	lH := emuPerInch / 4
+
+	edgeDX := cx2 - cx1
+	edgeDY := cy2 - cy1
+	dx, dy := labelOffset(edgeDX, edgeDY, labelW, lH)
 
 	return fmt.Sprintf(`      <p:sp>
         <p:nvSpPr>
@@ -309,5 +320,5 @@ func renderERRelLabel(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
           </a:p>
         </p:txBody>
       </p:sp>
-`, id, midX-labelW/2, midY-labelH/2, labelW, labelH, halfPt(9), escapeXML(rel.Label))
+`, id, midX-labelW/2+dx, midY-lH/2+dy, labelW, lH, halfPt(9), escapeXML(rel.Label))
 }

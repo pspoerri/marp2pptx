@@ -576,44 +576,13 @@ func renderDiagramNode(ln mermaid.LayoutNode, id, offX, offY int) string {
 }
 
 func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toShapeID int) string {
-	// Compute connection points (center of each node's edge)
 	from := le.FromNode
 	to := le.ToNode
 
-	// Determine which sides to connect based on relative position
-	var x1, y1, x2, y2 int
-	dx := (to.X + to.W/2) - (from.X + from.W/2)
-	dy := (to.Y + to.H/2) - (from.Y + from.H/2)
-
-	if abs(dx) > abs(dy) {
-		// Horizontal connection
-		if dx > 0 {
-			x1 = from.X + from.W
-			y1 = from.Y + from.H/2
-			x2 = to.X
-			y2 = to.Y + to.H/2
-		} else {
-			x1 = from.X
-			y1 = from.Y + from.H/2
-			x2 = to.X + to.W
-			y2 = to.Y + to.H/2
-		}
-	} else {
-		// Vertical connection
-		if dy > 0 {
-			x1 = from.X + from.W/2
-			y1 = from.Y + from.H
-			x2 = to.X + to.W/2
-			y2 = to.Y
-		} else {
-			x1 = from.X + from.W/2
-			y1 = from.Y
-			x2 = to.X + to.W/2
-			y2 = to.Y + to.H
-		}
-	}
-
-	// Apply segment offset
+	x1, y1, x2, y2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
 	x1 += offX
 	y1 += offY
 	x2 += offX
@@ -658,6 +627,8 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
 		flipV = ` flipV="1"`
 	}
 
+	geom := connectorGeom(cxLine, cyLine)
+
 	return fmt.Sprintf(`      <p:cxnSp>
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="Connector %d"/>
@@ -672,7 +643,7 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
             <a:off x="%d" y="%d"/>
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
-          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:prstGeom prst="%s"><a:avLst/></a:prstGeom>
           <a:ln w="%d">
             <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
             %s%s
@@ -681,18 +652,28 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
       </p:cxnSp>
 `, id, id, fromShapeID, toShapeID,
 		flipH, flipV, minX, minY, cxLine, cyLine,
-		lineW, dashXML, tailEnd)
+		geom, lineW, dashXML, tailEnd)
 }
 
 func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
-	// Place label at midpoint of the edge
 	from := le.FromNode
 	to := le.ToNode
-	midX := offX + (from.X+from.W/2+to.X+to.W/2)/2
-	midY := offY + (from.Y+from.H/2+to.Y+to.H/2)/2
+
+	// Compute actual connection points for accurate midpoint
+	cx1, cy1, cx2, cy2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
+	midX := offX + (cx1+cx2)/2
+	midY := offY + (cy1+cy2)/2
 
 	labelW := len(le.Label)*emuPerPoint*8 + emuPerInch/4
-	labelH := emuPerInch / 4
+	lH := emuPerInch / 4
+
+	// Offset perpendicular to edge so label doesn't overlap the connector
+	edgeDX := cx2 - cx1
+	edgeDY := cy2 - cy1
+	dx, dy := labelOffset(edgeDX, edgeDY, labelW, lH)
 
 	return fmt.Sprintf(`      <p:sp>
         <p:nvSpPr>
@@ -706,7 +687,7 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
           <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-          <a:noFill/>
+          <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
         </p:spPr>
         <p:txBody>
           <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
@@ -717,7 +698,7 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
           </a:p>
         </p:txBody>
       </p:sp>
-`, id, midX-labelW/2, midY-labelH/2, labelW, labelH, halfPt(10), escapeXML(le.Label))
+`, id, midX-labelW/2+dx, midY-lH/2+dy, labelW, lH, halfPt(10), escapeXML(le.Label))
 }
 
 // ---------------------------------------------------------------------------
