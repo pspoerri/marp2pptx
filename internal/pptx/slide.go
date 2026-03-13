@@ -600,7 +600,8 @@ func isBackEdge(from, to mermaid.LayoutNode) bool {
 }
 
 // renderBackEdgeShape renders a back-edge that routes around the right side
-// of intermediate nodes using a custom geometry path with rounded corners.
+// of intermediate nodes using a custom geometry path with rounded corners
+// and an explicit arrowhead triangle.
 func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
 	from := le.FromNode
 	to := le.ToNode
@@ -617,32 +618,43 @@ func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
 	}
 	routeX := rightMax + backEdgeOffset
 
-	// Bounding box
+	// Arrowhead dimensions
+	arrowLen := 0
+	arrowHW := 0 // half-width
+	if le.Arrow {
+		arrowLen = emuPerInch / 12
+		arrowHW = emuPerInch / 24
+	}
+
+	// Bounding box (extended for arrowhead wings)
 	bbX := startX
 	if endX < bbX {
 		bbX = endX
 	}
-	bbY := endY // endY < startY for back-edges
+	bbY := endY - arrowHW
 	bbCX := routeX - bbX
-	bbCY := startY - endY
+	bbCY := startY - bbY
 
 	// Path coordinates relative to bounding box
+	// Y coords shifted by arrowHW to accommodate arrowhead wings
 	p1x := startX - bbX
-	p1y := bbCY // bottom
-	p2x := bbCX // right edge
+	p1y := bbCY // bottom (source level)
+	p2x := bbCX // right edge (route point)
 	p2y := bbCY
 	p3x := bbCX
-	p3y := 0
-	p4x := endX - bbX
-	p4y := 0
+	p3y := arrowHW // top (target level, shifted by arrowHW)
+
+	// Line endpoint: stop at arrowhead base (arrowLen right of target edge)
+	lineEndX := endX - bbX + arrowLen
+	lineEndY := arrowHW
 
 	// Corner radius
 	r := emuPerInch / 8
 	if r > bbCX/3 {
 		r = bbCX / 3
 	}
-	if r > bbCY/6 {
-		r = bbCY / 6
+	if vertSpan := bbCY - 2*arrowHW; r > vertSpan/6 {
+		r = vertSpan / 6
 	}
 
 	// Line style
@@ -655,12 +667,9 @@ func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
 		lineW = 25400 // 2pt
 	}
 
-	tailEnd := ""
-	if le.Arrow {
-		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
-	}
-
-	return fmt.Sprintf(`      <p:sp>
+	// Build the routing line path (unfilled, stroked only)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(`      <p:sp>
         <p:nvSpPr>
           <p:cNvPr id="%d" name="BackEdge %d"/>
           <p:cNvSpPr/>
@@ -678,7 +687,7 @@ func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
             <a:cxnLst/>
             <a:rect l="0" t="0" r="0" b="0"/>
             <a:pathLst>
-              <a:path w="%d" h="%d">
+              <a:path w="%d" h="%d" fill="none">
                 <a:moveTo><a:pt x="%d" y="%d"/></a:moveTo>
                 <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
                 <a:quadBezTo><a:pt x="%d" y="%d"/><a:pt x="%d" y="%d"/></a:quadBezTo>
@@ -686,15 +695,6 @@ func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
                 <a:quadBezTo><a:pt x="%d" y="%d"/><a:pt x="%d" y="%d"/></a:quadBezTo>
                 <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
               </a:path>
-            </a:pathLst>
-          </a:custGeom>
-          <a:noFill/>
-          <a:ln w="%d">
-            <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
-            %s%s
-          </a:ln>
-        </p:spPr>
-      </p:sp>
 `, id, id,
 		offX+bbX, offY+bbY, bbCX, bbCY,
 		bbCX, bbCY,
@@ -703,8 +703,42 @@ func renderBackEdgeShape(le mermaid.LayoutEdge, id, offX, offY int) string {
 		p2x, p2y, p2x, p2y-r, // quadBezTo: round bottom-right corner
 		p3x, p3y+r, // lineTo: go up, approach top-right corner
 		p3x, p3y, p3x-r, p3y, // quadBezTo: round top-right corner
-		p4x, p4y, // lineTo: go left to target right edge
-		lineW, dashXML, tailEnd)
+		lineEndX, lineEndY)) // lineTo: go left to arrowhead base
+
+	// Add filled arrowhead triangle pointing left at target's right edge
+	if le.Arrow {
+		tipX := endX - bbX
+		tipY := arrowHW
+		sb.WriteString(fmt.Sprintf(`              <a:path w="%d" h="%d">
+                <a:moveTo><a:pt x="%d" y="%d"/></a:moveTo>
+                <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
+                <a:lnTo><a:pt x="%d" y="%d"/></a:lnTo>
+                <a:close/>
+              </a:path>
+`, bbCX, bbCY,
+			tipX, tipY, // arrow tip at target right edge
+			tipX+arrowLen, tipY-arrowHW, // upper wing
+			tipX+arrowLen, tipY+arrowHW)) // lower wing
+	}
+
+	// Shape fill: needed for the arrowhead triangle; line path uses fill="none"
+	fillXML := `<a:noFill/>`
+	if le.Arrow {
+		fillXML = `<a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>`
+	}
+
+	sb.WriteString(fmt.Sprintf(`            </a:pathLst>
+          </a:custGeom>
+          %s
+          <a:ln w="%d">
+            <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
+            %s
+          </a:ln>
+        </p:spPr>
+      </p:sp>
+`, fillXML, lineW, dashXML))
+
+	return sb.String()
 }
 
 func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toShapeID int) string {
@@ -802,14 +836,14 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
 	var labelX, labelY int
 
 	if isBackEdge(from, to) {
-		// Position label at midpoint of the vertical routing segment
+		// Center label on the vertical segment of the back-edge route
 		rightX := from.X + from.W
 		if to.X+to.W > rightX {
 			rightX = to.X + to.W
 		}
 		rightX += backEdgeOffset
 		midY := (from.Y + from.H/2 + to.Y + to.H/2) / 2
-		labelX = offX + rightX + emuPerInch/16
+		labelX = offX + rightX - labelW/2
 		labelY = offY + midY - lH/2
 	} else {
 		// Compute actual connection points for accurate midpoint
