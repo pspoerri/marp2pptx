@@ -17,8 +17,17 @@ func Parse(source string) (Graph, error) {
 			continue
 		}
 		lower := strings.ToLower(line)
-		if lower == "sequencediagram" {
+		switch {
+		case lower == "sequencediagram":
 			return parseSequenceDiagram(lines)
+		case lower == "classdiagram":
+			return parseClassDiagram(lines)
+		case lower == "statediagram" || lower == "statediagram-v2":
+			return parseStateDiagram(lines)
+		case lower == "journey":
+			return parseJourneyDiagram(lines)
+		case lower == "erdiagram":
+			return parseERDiagram(lines)
 		}
 		break
 	}

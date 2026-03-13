@@ -465,8 +465,27 @@ func renderCodeBlock(cb markdown.CodeBlock) string {
 func renderDiagramShapes(d markdown.Diagram, startID, x, y, cx, cy int) (string, int) {
 	layout := mermaid.ComputeLayout(d.Graph, cx, cy)
 
-	if layout.Type == mermaid.DiagramSequence && layout.Sequence != nil {
-		return renderSequenceDiagram(layout, startID, x, y)
+	switch layout.Type {
+	case mermaid.DiagramSequence:
+		if layout.Sequence != nil {
+			return renderSequenceDiagram(layout, startID, x, y)
+		}
+	case mermaid.DiagramClass:
+		if layout.Class != nil {
+			return renderClassDiagramShapes(layout, startID, x, y)
+		}
+	case mermaid.DiagramState:
+		if layout.State != nil {
+			return renderStateDiagramShapes(layout, startID, x, y)
+		}
+	case mermaid.DiagramJourney:
+		if layout.Journey != nil {
+			return renderJourneyDiagramShapes(layout, startID, x, y)
+		}
+	case mermaid.DiagramER:
+		if layout.ER != nil {
+			return renderERDiagramShapes(layout, startID, x, y)
+		}
 	}
 	return renderFlowchartDiagram(layout, startID, x, y)
 }

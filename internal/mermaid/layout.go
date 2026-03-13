@@ -19,8 +19,27 @@ const (
 // ComputeLayout assigns positions to all nodes and edges in the graph.
 // The layout fits within the given bounding box (maxW x maxH in EMU).
 func ComputeLayout(g Graph, maxW, maxH int) Layout {
-	if g.Type == DiagramSequence && g.Sequence != nil {
-		return computeSequenceLayout(g, maxW, maxH)
+	switch g.Type {
+	case DiagramSequence:
+		if g.Sequence != nil {
+			return computeSequenceLayout(g, maxW, maxH)
+		}
+	case DiagramClass:
+		if g.Class != nil {
+			return computeClassLayout(g, maxW, maxH)
+		}
+	case DiagramState:
+		if g.State != nil {
+			return computeStateLayout(g, maxW, maxH)
+		}
+	case DiagramJourney:
+		if g.Journey != nil {
+			return computeJourneyLayout(g, maxW, maxH)
+		}
+	case DiagramER:
+		if g.ER != nil {
+			return computeERLayout(g, maxW, maxH)
+		}
 	}
 	return computeFlowchartLayout(g, maxW, maxH)
 }
@@ -49,6 +68,11 @@ func computeFlowchartLayout(g Graph, maxW, maxH int) Layout {
 			maxLayer = layer
 		}
 	}
+
+	// Build adjacency for barycenter ordering
+	adj := buildAdj(g, nodeIndex)
+	radj := buildReverseAdj(g, nodeIndex)
+	reorderLayersBarycenter(layerNodes, adj, radj, maxLayer)
 
 	numLayers := maxLayer + 1
 	maxPerLayer := 0
@@ -190,6 +214,113 @@ func assignLayers(g Graph, nodeIndex map[string]int) []int {
 	}
 
 	return layers
+}
+
+func buildAdj(g Graph, nodeIndex map[string]int) [][]int {
+	n := len(g.Nodes)
+	adj := make([][]int, n)
+	for _, e := range g.Edges {
+		fi, fok := nodeIndex[e.From]
+		ti, tok := nodeIndex[e.To]
+		if fok && tok {
+			adj[fi] = append(adj[fi], ti)
+		}
+	}
+	return adj
+}
+
+func buildReverseAdj(g Graph, nodeIndex map[string]int) [][]int {
+	n := len(g.Nodes)
+	radj := make([][]int, n)
+	for _, e := range g.Edges {
+		fi, fok := nodeIndex[e.From]
+		ti, tok := nodeIndex[e.To]
+		if fok && tok {
+			radj[ti] = append(radj[ti], fi)
+		}
+	}
+	return radj
+}
+
+// reorderLayersBarycenter reorders nodes within each layer using the
+// barycenter heuristic to reduce edge crossings.
+func reorderLayersBarycenter(layerNodes map[int][]int, adj, radj [][]int, maxLayer int) {
+	for sweep := 0; sweep < 4; sweep++ {
+		// Forward sweep: order by average position of predecessors
+		for layer := 1; layer <= maxLayer; layer++ {
+			posMap := make(map[int]int)
+			for pos, idx := range layerNodes[layer-1] {
+				posMap[idx] = pos
+			}
+			barySort(layerNodes[layer], func(idx int) float64 {
+				sum := 0.0
+				count := 0
+				for _, pred := range radj[idx] {
+					if p, ok := posMap[pred]; ok {
+						sum += float64(p)
+						count++
+					}
+				}
+				if count > 0 {
+					return sum / float64(count)
+				}
+				return -1
+			})
+		}
+
+		// Backward sweep: order by average position of successors
+		for layer := maxLayer - 1; layer >= 0; layer-- {
+			posMap := make(map[int]int)
+			for pos, idx := range layerNodes[layer+1] {
+				posMap[idx] = pos
+			}
+			barySort(layerNodes[layer], func(idx int) float64 {
+				sum := 0.0
+				count := 0
+				for _, succ := range adj[idx] {
+					if p, ok := posMap[succ]; ok {
+						sum += float64(p)
+						count++
+					}
+				}
+				if count > 0 {
+					return sum / float64(count)
+				}
+				return -1
+			})
+		}
+	}
+}
+
+// barySort sorts indices by the barycenter value computed by fn.
+// Indices where fn returns -1 (no neighbors) keep their relative order.
+func barySort(indices []int, fn func(int) float64) {
+	if len(indices) <= 1 {
+		return
+	}
+	vals := make([]float64, len(indices))
+	for i, idx := range indices {
+		vals[i] = fn(idx)
+	}
+	// Assign default positions for unconnected nodes
+	for i := range vals {
+		if vals[i] < 0 {
+			vals[i] = float64(i)
+		}
+	}
+	// Insertion sort (layers are typically small)
+	for i := 1; i < len(indices); i++ {
+		keyIdx := indices[i]
+		keyVal := vals[i]
+		j := i - 1
+		for j >= 0 && vals[j] > keyVal {
+			indices[j+1] = indices[j]
+			vals[j+1] = vals[j]
+			j--
+		}
+		indices[j+1] = keyIdx
+		vals[j+1] = keyVal
+	}
 }
 
 func fitNodeSize(numLayers, maxPerLayer int, horizontal bool, maxW, maxH int) (nw, nh int) {

@@ -315,6 +315,452 @@ func TestParse_SequenceSkipsControlFlow(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Class diagram tests
+// ---------------------------------------------------------------------------
+
+func TestParse_ClassDiagram(t *testing.T) {
+	input := `classDiagram
+    class Animal {
+        +String name
+        +int age
+        +makeSound()
+    }
+    class Dog {
+        +String breed
+        +bark()
+    }
+    Animal <|-- Dog`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Type != DiagramClass {
+		t.Fatalf("expected class diagram type, got %d", g.Type)
+	}
+	if g.Class == nil {
+		t.Fatal("expected non-nil Class")
+	}
+	if len(g.Class.Classes) != 2 {
+		t.Fatalf("expected 2 classes, got %d", len(g.Class.Classes))
+	}
+	if g.Class.Classes[0].Name != "Animal" {
+		t.Errorf("expected first class 'Animal', got %q", g.Class.Classes[0].Name)
+	}
+	if len(g.Class.Classes[0].Members) != 3 {
+		t.Errorf("expected 3 members for Animal, got %d", len(g.Class.Classes[0].Members))
+	}
+	if len(g.Class.Relations) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(g.Class.Relations))
+	}
+	rel := g.Class.Relations[0]
+	if rel.From != "Animal" || rel.To != "Dog" {
+		t.Errorf("expected relation Animal-Dog, got %s-%s", rel.From, rel.To)
+	}
+	if rel.FromMarker != MarkerTriangle {
+		t.Errorf("expected triangle marker on From side, got %d", rel.FromMarker)
+	}
+}
+
+func TestParse_ClassRelationTypes(t *testing.T) {
+	tests := []struct {
+		op         string
+		fromMarker RelMarker
+		toMarker   RelMarker
+		dashed     bool
+	}{
+		{"<|--", MarkerTriangle, MarkerNone, false},
+		{"--|>", MarkerNone, MarkerTriangle, false},
+		{"..|>", MarkerNone, MarkerTriangle, true},
+		{"*--", MarkerDiamond, MarkerNone, false},
+		{"--*", MarkerNone, MarkerDiamond, false},
+		{"o--", MarkerCircle, MarkerNone, false},
+		{"-->", MarkerNone, MarkerArrow, false},
+		{"..>", MarkerNone, MarkerArrow, true},
+		{"--", MarkerNone, MarkerNone, false},
+	}
+	for _, tt := range tests {
+		input := "classDiagram\n    A " + tt.op + " B"
+		g, err := Parse(input)
+		if err != nil {
+			t.Fatalf("Parse %q failed: %v", tt.op, err)
+		}
+		if len(g.Class.Relations) != 1 {
+			t.Fatalf("Parse %q: expected 1 relation, got %d", tt.op, len(g.Class.Relations))
+		}
+		rel := g.Class.Relations[0]
+		if rel.FromMarker != tt.fromMarker {
+			t.Errorf("Parse %q: expected fromMarker %d, got %d", tt.op, tt.fromMarker, rel.FromMarker)
+		}
+		if rel.ToMarker != tt.toMarker {
+			t.Errorf("Parse %q: expected toMarker %d, got %d", tt.op, tt.toMarker, rel.ToMarker)
+		}
+		if rel.Dashed != tt.dashed {
+			t.Errorf("Parse %q: expected dashed=%v, got %v", tt.op, tt.dashed, rel.Dashed)
+		}
+	}
+}
+
+func TestParse_ClassMember(t *testing.T) {
+	tests := []struct {
+		input      string
+		visibility string
+		name       string
+		isMethod   bool
+	}{
+		{"+String name", "+", "name", false},
+		{"-makeSound()", "-", "makeSound", true},
+		{"#int age", "#", "age", false},
+		{"~process()", "~", "process", true},
+	}
+	for _, tt := range tests {
+		m, ok := parseClassMember(tt.input)
+		if !ok {
+			t.Fatalf("parseClassMember(%q) failed", tt.input)
+		}
+		if m.Visibility != tt.visibility {
+			t.Errorf("parseClassMember(%q): expected visibility %q, got %q", tt.input, tt.visibility, m.Visibility)
+		}
+		if m.Name != tt.name {
+			t.Errorf("parseClassMember(%q): expected name %q, got %q", tt.input, tt.name, m.Name)
+		}
+		if m.IsMethod != tt.isMethod {
+			t.Errorf("parseClassMember(%q): expected isMethod=%v, got %v", tt.input, tt.isMethod, m.IsMethod)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// State diagram tests
+// ---------------------------------------------------------------------------
+
+func TestParse_StateDiagram(t *testing.T) {
+	input := `stateDiagram-v2
+    [*] --> Idle
+    Idle --> Processing : start
+    Processing --> Done : finish
+    Done --> [*]`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Type != DiagramState {
+		t.Fatalf("expected state diagram type, got %d", g.Type)
+	}
+	if g.State == nil {
+		t.Fatal("expected non-nil State")
+	}
+	// [*] appears twice → 2 star nodes + 3 regular states = 5 total
+	if len(g.State.States) != 5 {
+		t.Fatalf("expected 5 states, got %d", len(g.State.States))
+	}
+	if len(g.State.Transitions) != 4 {
+		t.Fatalf("expected 4 transitions, got %d", len(g.State.Transitions))
+	}
+	// Check star nodes
+	starCount := 0
+	for _, s := range g.State.States {
+		if s.Type == StateStar {
+			starCount++
+		}
+	}
+	if starCount != 2 {
+		t.Errorf("expected 2 star states, got %d", starCount)
+	}
+}
+
+func TestParse_StateDiagramLabeled(t *testing.T) {
+	input := `stateDiagram-v2
+    A --> B : transition`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(g.State.Transitions) != 1 {
+		t.Fatalf("expected 1 transition, got %d", len(g.State.Transitions))
+	}
+	if g.State.Transitions[0].Label != "transition" {
+		t.Errorf("expected label 'transition', got %q", g.State.Transitions[0].Label)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Journey diagram tests
+// ---------------------------------------------------------------------------
+
+func TestParse_JourneyDiagram(t *testing.T) {
+	input := `journey
+    title My Working Day
+    section Morning
+        Make coffee: 5: Me
+        Commute: 2: Me, Bus
+    section Work
+        Write code: 5: Me`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Type != DiagramJourney {
+		t.Fatalf("expected journey diagram type, got %d", g.Type)
+	}
+	if g.Journey == nil {
+		t.Fatal("expected non-nil Journey")
+	}
+	if g.Journey.Title != "My Working Day" {
+		t.Errorf("expected title 'My Working Day', got %q", g.Journey.Title)
+	}
+	if len(g.Journey.Sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(g.Journey.Sections))
+	}
+	if g.Journey.Sections[0].Name != "Morning" {
+		t.Errorf("expected section 'Morning', got %q", g.Journey.Sections[0].Name)
+	}
+	if len(g.Journey.Sections[0].Tasks) != 2 {
+		t.Fatalf("expected 2 tasks in Morning, got %d", len(g.Journey.Sections[0].Tasks))
+	}
+	task := g.Journey.Sections[0].Tasks[0]
+	if task.Name != "Make coffee" {
+		t.Errorf("expected task name 'Make coffee', got %q", task.Name)
+	}
+	if task.Score != 5 {
+		t.Errorf("expected score 5, got %d", task.Score)
+	}
+	if len(task.Actors) != 1 || task.Actors[0] != "Me" {
+		t.Errorf("expected actors [Me], got %v", task.Actors)
+	}
+	task2 := g.Journey.Sections[0].Tasks[1]
+	if len(task2.Actors) != 2 {
+		t.Errorf("expected 2 actors for Commute, got %d", len(task2.Actors))
+	}
+}
+
+func TestParse_JourneyScoreClamping(t *testing.T) {
+	input := `journey
+    section Test
+        Low: 0: A
+        High: 10: A`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Journey.Sections[0].Tasks[0].Score != 1 {
+		t.Errorf("expected score clamped to 1, got %d", g.Journey.Sections[0].Tasks[0].Score)
+	}
+	if g.Journey.Sections[0].Tasks[1].Score != 5 {
+		t.Errorf("expected score clamped to 5, got %d", g.Journey.Sections[0].Tasks[1].Score)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ER diagram tests
+// ---------------------------------------------------------------------------
+
+func TestParse_ERDiagram(t *testing.T) {
+	input := `erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ LINE-ITEM : contains`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Type != DiagramER {
+		t.Fatalf("expected ER diagram type, got %d", g.Type)
+	}
+	if g.ER == nil {
+		t.Fatal("expected non-nil ER")
+	}
+	if len(g.ER.Entities) != 3 {
+		t.Fatalf("expected 3 entities, got %d", len(g.ER.Entities))
+	}
+	if len(g.ER.Relationships) != 2 {
+		t.Fatalf("expected 2 relationships, got %d", len(g.ER.Relationships))
+	}
+	rel := g.ER.Relationships[0]
+	if rel.EntityA != "CUSTOMER" || rel.EntityB != "ORDER" {
+		t.Errorf("expected CUSTOMER-ORDER, got %s-%s", rel.EntityA, rel.EntityB)
+	}
+	if rel.CardinalityA != CardExactlyOne {
+		t.Errorf("expected CardExactlyOne for A, got %d", rel.CardinalityA)
+	}
+	if rel.CardinalityB != CardZeroOrMore {
+		t.Errorf("expected CardZeroOrMore for B, got %d", rel.CardinalityB)
+	}
+	if rel.Label != "places" {
+		t.Errorf("expected label 'places', got %q", rel.Label)
+	}
+	if !rel.Identifying {
+		t.Error("expected identifying relationship")
+	}
+}
+
+func TestParse_ERDiagramWithAttributes(t *testing.T) {
+	input := `erDiagram
+    CUSTOMER {
+        int id PK
+        string name
+    }
+    CUSTOMER ||--o{ ORDER : places`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(g.ER.Entities) < 1 {
+		t.Fatal("expected at least 1 entity")
+	}
+	cust := g.ER.Entities[0]
+	if len(cust.Attributes) != 2 {
+		t.Fatalf("expected 2 attributes, got %d", len(cust.Attributes))
+	}
+	if cust.Attributes[0].Type != "int" || cust.Attributes[0].Name != "id" {
+		t.Errorf("unexpected first attribute: %+v", cust.Attributes[0])
+	}
+	if len(cust.Attributes[0].Keys) != 1 || cust.Attributes[0].Keys[0] != "PK" {
+		t.Errorf("expected PK key, got %v", cust.Attributes[0].Keys)
+	}
+}
+
+func TestParse_ERCardinalities(t *testing.T) {
+	tests := []struct {
+		left  string
+		right string
+		cardA ERCardinality
+		cardB ERCardinality
+	}{
+		{"||", "||", CardExactlyOne, CardExactlyOne},
+		{"||", "o{", CardExactlyOne, CardZeroOrMore},
+		{"}|", "|{", CardOneOrMore, CardOneOrMore},
+		{"o|", "|o", CardZeroOrOne, CardZeroOrOne},
+	}
+	for _, tt := range tests {
+		input := "erDiagram\n    A " + tt.left + "--" + tt.right + " B : rel"
+		g, err := Parse(input)
+		if err != nil {
+			t.Fatalf("Parse %q--%q failed: %v", tt.left, tt.right, err)
+		}
+		rel := g.ER.Relationships[0]
+		if rel.CardinalityA != tt.cardA {
+			t.Errorf("%q--%q: expected cardA %d, got %d", tt.left, tt.right, tt.cardA, rel.CardinalityA)
+		}
+		if rel.CardinalityB != tt.cardB {
+			t.Errorf("%q--%q: expected cardB %d, got %d", tt.left, tt.right, tt.cardB, rel.CardinalityB)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Layout tests for new diagram types
+// ---------------------------------------------------------------------------
+
+func TestComputeLayout_Class(t *testing.T) {
+	g := Graph{
+		Type: DiagramClass,
+		Class: &ClassDiagram{
+			Classes: []ClassDef{
+				{Name: "Animal", Members: []ClassMember{{Name: "name", Type: "String", Visibility: "+"}}},
+				{Name: "Dog", Members: []ClassMember{{Name: "bark", IsMethod: true, Visibility: "+"}}},
+			},
+			Relations: []ClassRelation{
+				{From: "Animal", To: "Dog", FromMarker: MarkerTriangle},
+			},
+		},
+	}
+	layout := ComputeLayout(g, 8229600, 6001200)
+	if layout.Class == nil {
+		t.Fatal("expected non-nil class layout")
+	}
+	if len(layout.Class.Classes) != 2 {
+		t.Fatalf("expected 2 classes, got %d", len(layout.Class.Classes))
+	}
+	// Animal (parent) should be above Dog (child)
+	if layout.Class.Classes[0].Y >= layout.Class.Classes[1].Y {
+		t.Error("expected Animal.Y < Dog.Y (parent above child)")
+	}
+}
+
+func TestComputeLayout_State(t *testing.T) {
+	g := Graph{
+		Type: DiagramState,
+		State: &StateDiagram{
+			States: []StateDef{
+				{ID: "__star_1__", Type: StateStar},
+				{ID: "Idle", Label: "Idle", Type: StateNormal},
+			},
+			Transitions: []StateTransition{
+				{From: "__star_1__", To: "Idle"},
+			},
+		},
+	}
+	layout := ComputeLayout(g, 8229600, 6001200)
+	if layout.State == nil {
+		t.Fatal("expected non-nil state layout")
+	}
+	if len(layout.State.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(layout.State.Nodes))
+	}
+	if !layout.State.Stars["__star_1__"] {
+		t.Error("expected __star_1__ in Stars")
+	}
+}
+
+func TestComputeLayout_Journey(t *testing.T) {
+	g := Graph{
+		Type: DiagramJourney,
+		Journey: &JourneyDiagram{
+			Title: "Test",
+			Sections: []JourneySection{
+				{Name: "S1", Tasks: []JourneyTask{
+					{Name: "T1", Score: 5},
+					{Name: "T2", Score: 3},
+				}},
+			},
+		},
+	}
+	layout := ComputeLayout(g, 8229600, 6001200)
+	if layout.Journey == nil {
+		t.Fatal("expected non-nil journey layout")
+	}
+	if layout.Journey.Title != "Test" {
+		t.Errorf("expected title 'Test', got %q", layout.Journey.Title)
+	}
+	if len(layout.Journey.Sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(layout.Journey.Sections))
+	}
+	if len(layout.Journey.Sections[0].Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(layout.Journey.Sections[0].Tasks))
+	}
+	// Task with score 5 should have larger bar than score 3
+	t1 := layout.Journey.Sections[0].Tasks[0]
+	t2 := layout.Journey.Sections[0].Tasks[1]
+	if t1.BarW <= t2.BarW {
+		t.Error("expected score-5 task bar wider than score-3")
+	}
+}
+
+func TestComputeLayout_ER(t *testing.T) {
+	g := Graph{
+		Type: DiagramER,
+		ER: &ERDiagram{
+			Entities: []EREntity{
+				{Name: "A"},
+				{Name: "B"},
+			},
+			Relationships: []ERRelationship{
+				{EntityA: "A", EntityB: "B", CardinalityA: CardExactlyOne, CardinalityB: CardZeroOrMore, Identifying: true, Label: "has"},
+			},
+		},
+	}
+	layout := ComputeLayout(g, 8229600, 6001200)
+	if layout.ER == nil {
+		t.Fatal("expected non-nil ER layout")
+	}
+	if len(layout.ER.Entities) != 2 {
+		t.Fatalf("expected 2 entities, got %d", len(layout.ER.Entities))
+	}
+	if len(layout.ER.Relationships) != 1 {
+		t.Fatalf("expected 1 relationship, got %d", len(layout.ER.Relationships))
+	}
+}
+
 func TestComputeLayout_Flowchart(t *testing.T) {
 	g := Graph{
 		Type:      DiagramFlowchart,
