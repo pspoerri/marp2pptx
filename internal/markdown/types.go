@@ -13,6 +13,7 @@ const (
 	BlockImage
 	BlockTable
 	BlockThematicBreak
+	BlockDefinitionList
 )
 
 // ContentBlock is a piece of slide content.
@@ -37,11 +38,13 @@ func (p Paragraph) BlockKind() BlockKind { return BlockParagraph }
 
 // Run is a span of text with formatting.
 type Run struct {
-	Text   string
-	Bold   bool
-	Italic bool
-	Code   bool
-	Link   string
+	Text          string
+	Bold          bool
+	Italic        bool
+	Code          bool
+	Link          string
+	Strikethrough bool
+	Superscript   bool
 }
 
 // List is an ordered or unordered list.
@@ -54,7 +57,8 @@ func (l List) BlockKind() BlockKind { return BlockList }
 
 // ListItem is a single list entry.
 type ListItem struct {
-	Runs []Run
+	Runs    []Run
+	Checked *bool // nil = not a task item; true/false = checkbox state
 }
 
 // CodeBlock is a fenced code block.
@@ -71,6 +75,7 @@ type Image struct {
 	URL        string
 	Background bool
 	Position   string
+	Data       []byte // Resolved image data (populated by caller)
 }
 
 func (i Image) BlockKind() BlockKind { return BlockImage }
@@ -101,3 +106,16 @@ func (c TableCell) Text() string {
 type ThematicBreak struct{}
 
 func (t ThematicBreak) BlockKind() BlockKind { return BlockThematicBreak }
+
+// DefinitionList is a list of term-definition pairs.
+type DefinitionList struct {
+	Items []DefinitionItem
+}
+
+func (d DefinitionList) BlockKind() BlockKind { return BlockDefinitionList }
+
+// DefinitionItem is a term with one or more descriptions.
+type DefinitionItem struct {
+	Term         []Run
+	Descriptions [][]Run
+}

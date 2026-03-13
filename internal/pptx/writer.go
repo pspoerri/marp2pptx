@@ -2,8 +2,14 @@ package pptx
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/pascal/marp2pptx/internal/markdown"
@@ -20,6 +26,41 @@ type SlideContent struct {
 func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
 	zw := zip.NewWriter(w)
 	defer zw.Close()
+
+	// First pass: collect all images and assign media paths / relationship IDs
+	type slideImageData struct {
+		bgRef  *ImageRef
+		fgRefs []ImageRef
+	}
+	allSlideImages := make([]slideImageData, len(slides))
+	mediaCounter := 0
+
+	for i, slide := range slides {
+		sid := &allSlideImages[i]
+		relCounter := 2 // rId1 = slideLayout
+		for _, block := range slide.Blocks {
+			img, ok := block.(markdown.Image)
+			if !ok || len(img.Data) == 0 {
+				continue
+			}
+			mediaCounter++
+			ext := imageExtFromURL(img.URL)
+			ref := ImageRef{
+				RelID:     fmt.Sprintf("rId%d", relCounter),
+				MediaPath: fmt.Sprintf("ppt/media/image%d.%s", mediaCounter, ext),
+				Image:     img,
+			}
+			ref.WidthPx, ref.HeightPx = imageDimensions(img.Data)
+			relCounter++
+
+			if img.Background {
+				r := ref
+				sid.bgRef = &r
+			} else {
+				sid.fgRefs = append(sid.fgRefs, ref)
+			}
+		}
+	}
 
 	// [Content_Types].xml
 	if err := addFile(zw, "[Content_Types].xml", contentTypesXML(len(slides))); err != nil {
@@ -62,18 +103,32 @@ func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
 
 	// Slides
 	for i, slide := range slides {
+		sid := allSlideImages[i]
+
+		// Embed image files
+		if sid.bgRef != nil {
+			if err := addFileBytes(zw, sid.bgRef.MediaPath, sid.bgRef.Image.Data); err != nil {
+				return err
+			}
+		}
+		for _, ref := range sid.fgRefs {
+			if err := addFileBytes(zw, ref.MediaPath, ref.Image.Data); err != nil {
+				return err
+			}
+		}
+
 		bgColor := slide.Directives.BackgroundColor
 		if bgColor == "" {
 			bgColor = meta.BackgroundColor
 		}
-		slideXML := generateSlideXML(slide.Blocks, bgColor)
-		path := fmt.Sprintf("ppt/slides/slide%d.xml", i+1)
-		if err := addFile(zw, path, slideXML); err != nil {
+		slideXML := generateSlideXML(slide.Blocks, bgColor, sid.bgRef, sid.fgRefs)
+		slidePath := fmt.Sprintf("ppt/slides/slide%d.xml", i+1)
+		if err := addFile(zw, slidePath, slideXML); err != nil {
 			return err
 		}
 
 		relsPath := fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", i+1)
-		if err := addFile(zw, relsPath, slideRelsXML()); err != nil {
+		if err := addFile(zw, relsPath, slideRelsXMLWithImages(sid.bgRef, sid.fgRefs)); err != nil {
 			return err
 		}
 	}
@@ -90,6 +145,36 @@ func addFile(zw *zip.Writer, name, content string) error {
 	return err
 }
 
+func addFileBytes(zw *zip.Writer, name string, data []byte) error {
+	f, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	return err
+}
+
+func imageExtFromURL(url string) string {
+	ext := strings.ToLower(path.Ext(url))
+	ext = strings.TrimPrefix(ext, ".")
+	switch ext {
+	case "jpg":
+		return "jpeg"
+	case "png", "jpeg", "gif":
+		return ext
+	default:
+		return "png"
+	}
+}
+
+func imageDimensions(data []byte) (width, height int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
 func contentTypesXML(slideCount int) string {
 	var overrides strings.Builder
 	for i := 1; i <= slideCount; i++ {
@@ -102,6 +187,8 @@ func contentTypesXML(slideCount int) string {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="png" ContentType="image/png"/>
   <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="gif" ContentType="image/gif"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
   <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
   <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
@@ -154,11 +241,21 @@ func presentationRelsXML(slideCount int) string {
 %s</Relationships>`, rels.String())
 }
 
-func slideRelsXML() string {
-	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+func slideRelsXMLWithImages(bgRef *ImageRef, fgRefs []ImageRef) string {
+	var rels strings.Builder
+	rels.WriteString(`  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+`)
+	if bgRef != nil {
+		rels.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/%s"/>
+`, bgRef.RelID, path.Base(bgRef.MediaPath)))
+	}
+	for _, ref := range fgRefs {
+		rels.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/%s"/>
+`, ref.RelID, path.Base(ref.MediaPath)))
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-</Relationships>`
+%s</Relationships>`, rels.String())
 }
 
 func slideMasterXML() string {

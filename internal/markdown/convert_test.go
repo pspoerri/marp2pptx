@@ -1,8 +1,18 @@
 package markdown
 
 import (
+	"strings"
 	"testing"
 )
+
+// runsText concatenates all run text for comparison.
+func runsText(runs []Run) string {
+	var sb strings.Builder
+	for _, r := range runs {
+		sb.WriteString(r.Text)
+	}
+	return sb.String()
+}
 
 func TestConvert_Heading(t *testing.T) {
 	blocks, err := Convert("# Hello World")
@@ -19,8 +29,8 @@ func TestConvert_Heading(t *testing.T) {
 	if h.Level != 1 {
 		t.Errorf("expected level 1, got %d", h.Level)
 	}
-	if len(h.Runs) != 1 || h.Runs[0].Text != "Hello World" {
-		t.Errorf("unexpected runs: %+v", h.Runs)
+	if got := runsText(h.Runs); got != "Hello World" {
+		t.Errorf("expected text 'Hello World', got %q", got)
 	}
 }
 
@@ -37,7 +47,6 @@ func TestConvert_FormattedParagraph(t *testing.T) {
 		t.Fatalf("expected Paragraph, got %T", blocks[0])
 	}
 
-	// Check that bold and italic runs exist
 	hasBold := false
 	hasItalic := false
 	for _, r := range p.Runs {
@@ -144,5 +153,100 @@ func TestConvert_BackgroundImage(t *testing.T) {
 	}
 	if img.URL != "image.jpg" {
 		t.Errorf("expected URL 'image.jpg', got %q", img.URL)
+	}
+}
+
+func TestConvert_Strikethrough(t *testing.T) {
+	blocks, err := Convert("This is ~~deleted~~ text.")
+	if err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	p, ok := blocks[0].(Paragraph)
+	if !ok {
+		t.Fatalf("expected Paragraph, got %T", blocks[0])
+	}
+	hasStrike := false
+	for _, r := range p.Runs {
+		if r.Strikethrough && r.Text == "deleted" {
+			hasStrike = true
+		}
+	}
+	if !hasStrike {
+		t.Errorf("expected a strikethrough run, got %+v", p.Runs)
+	}
+}
+
+func TestConvert_TaskList(t *testing.T) {
+	input := "- [x] Done\n- [ ] Todo"
+	blocks, err := Convert(input)
+	if err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	l, ok := blocks[0].(List)
+	if !ok {
+		t.Fatalf("expected List, got %T", blocks[0])
+	}
+	if len(l.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(l.Items))
+	}
+	if l.Items[0].Checked == nil || !*l.Items[0].Checked {
+		t.Error("expected first item to be checked")
+	}
+	if l.Items[1].Checked == nil || *l.Items[1].Checked {
+		t.Error("expected second item to be unchecked")
+	}
+}
+
+func TestConvert_DefinitionList(t *testing.T) {
+	input := "Term\n:   Description one\n:   Description two"
+	blocks, err := Convert(input)
+	if err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+	found := false
+	for _, b := range blocks {
+		if dl, ok := b.(DefinitionList); ok {
+			found = true
+			if len(dl.Items) != 1 {
+				t.Fatalf("expected 1 definition item, got %d", len(dl.Items))
+			}
+			if runsText(dl.Items[0].Term) != "Term" {
+				t.Errorf("expected term 'Term', got %q", runsText(dl.Items[0].Term))
+			}
+			if len(dl.Items[0].Descriptions) != 2 {
+				t.Errorf("expected 2 descriptions, got %d", len(dl.Items[0].Descriptions))
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected DefinitionList block, got %+v", blocks)
+	}
+}
+
+func TestConvert_Typographer(t *testing.T) {
+	blocks, err := Convert(`She said "hello" and he said 'hi'...`)
+	if err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+	if len(blocks) < 1 {
+		t.Fatal("expected at least 1 block")
+	}
+	p, ok := blocks[0].(Paragraph)
+	if !ok {
+		t.Fatalf("expected Paragraph, got %T", blocks[0])
+	}
+	text := runsText(p.Runs)
+	// Typographer should convert straight quotes to smart quotes and ... to ellipsis
+	if strings.Contains(text, `"hello"`) {
+		t.Errorf("expected typographer to convert straight quotes, got %q", text)
+	}
+	if strings.Contains(text, "...") {
+		t.Errorf("expected typographer to convert ellipsis, got %q", text)
 	}
 }

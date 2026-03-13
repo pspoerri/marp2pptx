@@ -17,27 +17,46 @@ var headingFontSizes = map[int]int{
 	6: 18,
 }
 
-// segment is a group of content blocks that share a shape.
-// Consecutive non-table blocks form one segment; each table is its own segment.
-type segment struct {
-	isTable bool
-	blocks  []markdown.ContentBlock
-	table   markdown.Table
+// ImageRef holds information about an embedded image for a slide.
+type ImageRef struct {
+	RelID     string
+	MediaPath string
+	Image     markdown.Image
+	WidthPx   int
+	HeightPx  int
 }
 
-// splitSegments groups blocks into text segments and table segments.
+// segment is a group of content blocks that share a shape.
+type segment struct {
+	isTable bool
+	isImage bool
+	blocks  []markdown.ContentBlock
+	table   markdown.Table
+	image   markdown.Image
+}
+
+// splitSegments groups blocks into text segments, table segments, and image segments.
 func splitSegments(blocks []markdown.ContentBlock) []segment {
 	var segments []segment
 	var textBlocks []markdown.ContentBlock
 
 	for _, block := range blocks {
-		if tbl, ok := block.(markdown.Table); ok {
+		switch b := block.(type) {
+		case markdown.Table:
 			if len(textBlocks) > 0 {
 				segments = append(segments, segment{blocks: textBlocks})
 				textBlocks = nil
 			}
-			segments = append(segments, segment{isTable: true, table: tbl})
-		} else {
+			segments = append(segments, segment{isTable: true, table: b})
+		case markdown.Image:
+			if !b.Background {
+				if len(textBlocks) > 0 {
+					segments = append(segments, segment{blocks: textBlocks})
+					textBlocks = nil
+				}
+				segments = append(segments, segment{isImage: true, image: b})
+			}
+		default:
 			textBlocks = append(textBlocks, block)
 		}
 	}
@@ -48,7 +67,7 @@ func splitSegments(blocks []markdown.ContentBlock) []segment {
 }
 
 // generateSlideXML produces the XML for a single slide.
-func generateSlideXML(blocks []markdown.ContentBlock, bgColor string) string {
+func generateSlideXML(blocks []markdown.ContentBlock, bgColor string, bgImageRef *ImageRef, fgImageRefs []ImageRef) string {
 	segments := splitSegments(blocks)
 	if len(segments) == 0 {
 		segments = []segment{{blocks: nil}}
@@ -56,12 +75,22 @@ func generateSlideXML(blocks []markdown.ContentBlock, bgColor string) string {
 
 	segHeight := contentHeight / len(segments)
 
+	// Build a map from image URL to foreground image ref for lookup
+	fgRefMap := make(map[string]ImageRef)
+	for _, ref := range fgImageRefs {
+		fgRefMap[ref.Image.URL] = ref
+	}
+
 	var shapes strings.Builder
 	shapeID := 2
 	for i, seg := range segments {
 		y := marginTop + i*segHeight
 		if seg.isTable {
 			shapes.WriteString(renderTableFrame(seg.table, shapeID, marginLeft, y, contentWidth, segHeight))
+		} else if seg.isImage {
+			if ref, ok := fgRefMap[seg.image.URL]; ok {
+				shapes.WriteString(renderImageShape(ref, shapeID, marginLeft, y, contentWidth, segHeight))
+			}
 		} else {
 			shapes.WriteString(renderTextShape(seg.blocks, shapeID, marginLeft, y, contentWidth, segHeight))
 		}
@@ -69,7 +98,9 @@ func generateSlideXML(blocks []markdown.ContentBlock, bgColor string) string {
 	}
 
 	bgXML := ""
-	if bgColor != "" {
+	if bgImageRef != nil {
+		bgXML = fmt.Sprintf(`<p:bg><p:bgPr><a:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>`, bgImageRef.RelID)
+	} else if bgColor != "" {
 		bgXML = fmt.Sprintf(`<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`, strings.TrimPrefix(bgColor, "#"))
 	}
 
@@ -97,6 +128,59 @@ func generateSlideXML(blocks []markdown.ContentBlock, bgColor string) string {
 </p:sld>`, bgXML, shapes.String())
 }
 
+// renderImageShape renders an image as a picture shape.
+func renderImageShape(ref ImageRef, id, x, y, cx, cy int) string {
+	// Fit image within available space maintaining aspect ratio
+	imgCX, imgCY := fitImage(ref.WidthPx, ref.HeightPx, cx, cy)
+
+	// Center within available space
+	offX := x + (cx-imgCX)/2
+	offY := y + (cy-imgCY)/2
+
+	return fmt.Sprintf(`      <p:pic>
+        <p:nvPicPr>
+          <p:cNvPr id="%d" name="Picture %d"/>
+          <p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>
+          <p:nvPr/>
+        </p:nvPicPr>
+        <p:blipFill>
+          <a:blip r:embed="%s"/>
+          <a:stretch><a:fillRect/></a:stretch>
+        </p:blipFill>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        </p:spPr>
+      </p:pic>
+`, id, id, ref.RelID, offX, offY, imgCX, imgCY)
+}
+
+// fitImage scales pixel dimensions to fit within maxCX/maxCY EMU, maintaining aspect ratio.
+func fitImage(imgW, imgH, maxCX, maxCY int) (cx, cy int) {
+	if imgW == 0 || imgH == 0 {
+		return maxCX, maxCY
+	}
+
+	// Convert pixel dimensions to EMU (assume 96 DPI)
+	emuW := imgW * emuPerInch / 96
+	emuH := imgH * emuPerInch / 96
+
+	scaleX := float64(maxCX) / float64(emuW)
+	scaleY := float64(maxCY) / float64(emuH)
+	scale := scaleX
+	if scaleY < scaleX {
+		scale = scaleY
+	}
+	if scale > 1 {
+		scale = 1 // Don't upscale
+	}
+
+	return int(float64(emuW) * scale), int(float64(emuH) * scale)
+}
+
 // renderTextShape renders non-table blocks into a text shape.
 func renderTextShape(blocks []markdown.ContentBlock, id, x, y, cx, cy int) string {
 	var body strings.Builder
@@ -110,6 +194,8 @@ func renderTextShape(blocks []markdown.ContentBlock, id, x, y, cx, cy int) strin
 			body.WriteString(renderList(b))
 		case markdown.CodeBlock:
 			body.WriteString(renderCodeBlock(b))
+		case markdown.DefinitionList:
+			body.WriteString(renderDefinitionList(b))
 		}
 	}
 
@@ -210,6 +296,9 @@ func renderTableCell(cell markdown.TableCell, header bool) string {
 		if r.Italic {
 			attrs += ` i="1"`
 		}
+		if r.Strikethrough {
+			attrs += ` strike="sngStrike"`
+		}
 		runs.WriteString(fmt.Sprintf(`                    <a:r><a:rPr lang="en-US"%s/><a:t>%s</a:t></a:r>
 `, attrs, escapeXML(r.Text)))
 	}
@@ -275,6 +364,12 @@ func renderRun(r markdown.Run, fontSize int, bold bool) string {
 	if r.Italic {
 		attrs += ` i="1"`
 	}
+	if r.Strikethrough {
+		attrs += ` strike="sngStrike"`
+	}
+	if r.Superscript {
+		attrs += ` baseline="30000"`
+	}
 
 	fontXML := ""
 	if r.Code {
@@ -297,16 +392,44 @@ func renderRun(r markdown.Run, fontSize int, bold bool) string {
 func renderList(l markdown.List) string {
 	var sb strings.Builder
 	for i, item := range l.Items {
+		// Prepend checkbox for task list items
+		itemRuns := item.Runs
+		if item.Checked != nil {
+			checkbox := "\u2610 " // ☐ unchecked
+			if *item.Checked {
+				checkbox = "\u2611 " // ☑ checked
+			}
+			itemRuns = append([]markdown.Run{{Text: checkbox}}, itemRuns...)
+		}
+
 		if l.Ordered {
-			// For ordered lists, prefix with number
-			prefixedRuns := make([]markdown.Run, 0, len(item.Runs)+1)
+			prefixedRuns := make([]markdown.Run, 0, len(itemRuns)+1)
 			prefixedRuns = append(prefixedRuns, markdown.Run{
 				Text: fmt.Sprintf("%d. ", i+1),
 			})
-			prefixedRuns = append(prefixedRuns, item.Runs...)
+			prefixedRuns = append(prefixedRuns, itemRuns...)
 			sb.WriteString(renderParagraph(prefixedRuns, 1, false))
 		} else {
-			sb.WriteString(renderParagraph(item.Runs, 1, true))
+			sb.WriteString(renderParagraph(itemRuns, 1, true))
+		}
+	}
+	return sb.String()
+}
+
+func renderDefinitionList(dl markdown.DefinitionList) string {
+	var sb strings.Builder
+	for _, item := range dl.Items {
+		// Render term as bold paragraph
+		boldRuns := make([]markdown.Run, len(item.Term))
+		for i, r := range item.Term {
+			boldRuns[i] = r
+			boldRuns[i].Bold = true
+		}
+		sb.WriteString(renderParagraph(boldRuns, 0, false))
+
+		// Render each description as indented paragraph
+		for _, desc := range item.Descriptions {
+			sb.WriteString(renderParagraph(desc, 1, false))
 		}
 	}
 	return sb.String()

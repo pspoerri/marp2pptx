@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/pascal/marp2pptx/internal/markdown"
 	"github.com/pascal/marp2pptx/internal/marp"
@@ -54,12 +56,15 @@ func run(inputPath, outputPath string) error {
 		return fmt.Errorf("parsing marp: %w", err)
 	}
 
+	baseDir := filepath.Dir(inputPath)
+
 	var slides []pptx.SlideContent
 	for _, slide := range pres.Slides {
 		blocks, err := markdown.Convert(slide.RawMarkdown)
 		if err != nil {
 			return fmt.Errorf("converting markdown: %w", err)
 		}
+		resolveImages(blocks, baseDir)
 		slides = append(slides, pptx.SlideContent{
 			Blocks:     blocks,
 			Directives: slide.Directives,
@@ -77,4 +82,26 @@ func run(inputPath, outputPath string) error {
 	}
 
 	return nil
+}
+
+// resolveImages reads local image files and attaches data to Image blocks.
+func resolveImages(blocks []markdown.ContentBlock, baseDir string) {
+	for i, block := range blocks {
+		img, ok := block.(markdown.Image)
+		if !ok || img.URL == "" {
+			continue
+		}
+		// Skip remote URLs
+		if strings.HasPrefix(img.URL, "http://") || strings.HasPrefix(img.URL, "https://") {
+			continue
+		}
+		imgPath := filepath.Join(baseDir, img.URL)
+		imgData, err := os.ReadFile(imgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not read image %s: %v\n", img.URL, err)
+			continue
+		}
+		img.Data = imgData
+		blocks[i] = img
+	}
 }
