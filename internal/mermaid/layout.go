@@ -202,11 +202,11 @@ func assignLayers(g Graph, nodeIndex map[string]int) []int {
 		curr := queue[0]
 		queue = queue[1:]
 		for _, next := range adj[curr] {
-			newLayer := layers[curr] + 1
-			if newLayer > layers[next] {
-				layers[next] = newLayer
-			}
 			if !visited[next] {
+				newLayer := layers[curr] + 1
+				if newLayer > layers[next] {
+					layers[next] = newLayer
+				}
 				visited[next] = true
 				queue = append(queue, next)
 			}
