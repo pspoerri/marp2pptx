@@ -754,6 +754,10 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
 		from.X, from.Y, from.W, from.H,
 		to.X, to.Y, to.W, to.H,
 	)
+	fromIdx, toIdx := connectionSideIdx(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
 	x1 += offX
 	y1 += offY
 	x2 += offX
@@ -775,7 +779,6 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
 		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
 	}
 
-	// Use a freeform connector (two-point line)
 	// Compute bounding box
 	minX := min(x1, x2)
 	minY := min(y1, y2)
@@ -804,8 +807,8 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="Connector %d"/>
           <p:cNvCxnSpPr>
-            <a:stCxn id="%d" idx="0"/>
-            <a:endCxn id="%d" idx="0"/>
+            <a:stCxn id="%d" idx="%d"/>
+            <a:endCxn id="%d" idx="%d"/>
           </p:cNvCxnSpPr>
           <p:nvPr/>
         </p:nvCxnSpPr>
@@ -821,7 +824,7 @@ func renderDiagramEdge(le mermaid.LayoutEdge, id, offX, offY, fromShapeID, toSha
           </a:ln>
         </p:spPr>
       </p:cxnSp>
-`, id, id, fromShapeID, toShapeID,
+`, id, id, fromShapeID, fromIdx, toShapeID, toIdx,
 		flipH, flipV, minX, minY, cxLine, cyLine,
 		geom, lineW, dashXML, tailEnd)
 }

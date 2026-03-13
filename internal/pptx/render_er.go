@@ -12,13 +12,17 @@ func renderERDiagramShapes(layout mermaid.Layout, startID, offX, offY int) (stri
 	var sb strings.Builder
 	id := startID
 
+	entityIDMap := make(map[string]int)
 	for _, en := range el.Entities {
+		entityIDMap[en.Name] = id
 		sb.WriteString(renderEREntity(en, id, offX, offY))
 		id++
 	}
 
 	for _, rel := range el.Relationships {
-		sb.WriteString(renderERRelation(rel, id, offX, offY))
+		fromShapeID := entityIDMap[rel.FromEntity.Name]
+		toShapeID := entityIDMap[rel.ToEntity.Name]
+		sb.WriteString(renderERRelation(rel, id, offX, offY, fromShapeID, toShapeID))
 		id++
 		// Cardinality labels
 		sb.WriteString(renderERCardLabel(rel, id, offX, offY, true))
@@ -101,11 +105,15 @@ func renderEREntity(en mermaid.EREntityLayout, id, offX, offY int) string {
 	return sb.String()
 }
 
-func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY int) string {
+func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY, fromShapeID, toShapeID int) string {
 	from := rel.FromEntity
 	to := rel.ToEntity
 
 	x1, y1, x2, y2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
+	fromIdx, toIdx := connectionSideIdx(
 		from.X, from.Y, from.W, from.H,
 		to.X, to.Y, to.W, to.H,
 	)
@@ -151,7 +159,10 @@ func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
 	return fmt.Sprintf(`      <p:cxnSp>
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="ERRel %d"/>
-          <p:cNvCxnSpPr/>
+          <p:cNvCxnSpPr>
+            <a:stCxn id="%d" idx="%d"/>
+            <a:endCxn id="%d" idx="%d"/>
+          </p:cNvCxnSpPr>
           <p:nvPr/>
         </p:nvCxnSpPr>
         <p:spPr>
@@ -166,7 +177,8 @@ func renderERRelation(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
           </a:ln>
         </p:spPr>
       </p:cxnSp>
-`, id, id, flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML)
+`, id, id, fromShapeID, fromIdx, toShapeID, toIdx,
+		flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML)
 }
 
 func cardinalityText(c mermaid.ERCardinality) string {
@@ -309,7 +321,7 @@ func renderERRelLabel(rel mermaid.ERRelationshipLayout, id, offX, offY int) stri
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
           <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-          <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+          <a:noFill/>
         </p:spPr>
         <p:txBody>
           <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>

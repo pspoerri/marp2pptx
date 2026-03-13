@@ -1,25 +1,9 @@
 package pptx
 
 // connectorGeom returns the OOXML preset geometry name for a connector.
-// It uses curvedConnector3 when the edge is significantly diagonal,
-// and straightConnector1 for mostly-axis-aligned edges.
-func connectorGeom(cx, cy int) string {
-	if cx < 0 {
-		cx = -cx
-	}
-	if cy < 0 {
-		cy = -cy
-	}
-	threshold := emuPerInch / 8
-	if cx > threshold && cy > threshold {
-		mn, mx := cx, cy
-		if mn > mx {
-			mn, mx = mx, mn
-		}
-		if mn*3 > mx {
-			return "curvedConnector3"
-		}
-	}
+// We use straightConnector1 for all edges because curvedConnector3 always
+// exits horizontally, which looks disconnected on vertical edge attachments.
+func connectorGeom(_, _ int) string {
 	return "straightConnector1"
 }
 

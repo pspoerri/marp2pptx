@@ -12,13 +12,17 @@ func renderClassDiagramShapes(layout mermaid.Layout, startID, offX, offY int) (s
 	var sb strings.Builder
 	id := startID
 
+	classIDMap := make(map[string]int)
 	for _, cn := range cl.Classes {
+		classIDMap[cn.Name] = id
 		sb.WriteString(renderClassNode(cn, id, offX, offY))
 		id++
 	}
 
 	for _, rel := range cl.Relations {
-		sb.WriteString(renderClassRelation(rel, id, offX, offY))
+		fromShapeID := classIDMap[rel.FromNode.Name]
+		toShapeID := classIDMap[rel.ToNode.Name]
+		sb.WriteString(renderClassRelation(rel, id, offX, offY, fromShapeID, toShapeID))
 		id++
 		if rel.Label != "" {
 			sb.WriteString(renderClassRelLabel(rel, id, offX, offY))
@@ -113,12 +117,16 @@ func formatClassMember(m mermaid.ClassMember) string {
 	return s
 }
 
-func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY int) string {
+func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY, fromShapeID, toShapeID int) string {
 	from := rel.FromNode
 	to := rel.ToNode
 
 	// Compute connection points
 	x1, y1, x2, y2 := computeConnectionPoints(
+		from.X, from.Y, from.W, from.H,
+		to.X, to.Y, to.W, to.H,
+	)
+	fromIdx, toIdx := connectionSideIdx(
 		from.X, from.Y, from.W, from.H,
 		to.X, to.Y, to.W, to.H,
 	)
@@ -169,7 +177,10 @@ func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
 	return fmt.Sprintf(`      <p:cxnSp>
         <p:nvCxnSpPr>
           <p:cNvPr id="%d" name="Relation %d"/>
-          <p:cNvCxnSpPr/>
+          <p:cNvCxnSpPr>
+            <a:stCxn id="%d" idx="%d"/>
+            <a:endCxn id="%d" idx="%d"/>
+          </p:cNvCxnSpPr>
           <p:nvPr/>
         </p:nvCxnSpPr>
         <p:spPr>
@@ -184,7 +195,8 @@ func renderClassRelation(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
           </a:ln>
         </p:spPr>
       </p:cxnSp>
-`, id, id, flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML, headEnd, tailEnd)
+`, id, id, fromShapeID, fromIdx, toShapeID, toIdx,
+		flipH, flipV, minX, minY, cx, cy, geom, lineW, dashXML, headEnd, tailEnd)
 }
 
 func markerToXML(marker mermaid.RelMarker, tag string) string {
@@ -232,7 +244,7 @@ func renderClassRelLabel(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
             <a:ext cx="%d" cy="%d"/>
           </a:xfrm>
           <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-          <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+          <a:noFill/>
         </p:spPr>
         <p:txBody>
           <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
@@ -244,6 +256,30 @@ func renderClassRelLabel(rel mermaid.ClassLayoutRelation, id, offX, offY int) st
         </p:txBody>
       </p:sp>
 `, id, midX-labelW/2+dx, midY-lH/2+dy, labelW, lH, halfPt(9), escapeXML(rel.Label))
+}
+
+// connectionSideIdx returns the OOXML connection-site indices (top=0, right=1,
+// bottom=2, left=3) for the attachment edges of two boxes.  The indices
+// correspond to the edges chosen by computeConnectionPoints.
+func connectionSideIdx(x1, y1, w1, h1, x2, y2, w2, h2 int) (fromIdx, toIdx int) {
+	c1x := x1 + w1/2
+	c1y := y1 + h1/2
+	c2x := x2 + w2/2
+	c2y := y2 + h2/2
+
+	dx := c2x - c1x
+	dy := c2y - c1y
+
+	if abs(dx) > abs(dy) {
+		if dx > 0 {
+			return 1, 3 // source right → target left
+		}
+		return 3, 1 // source left → target right
+	}
+	if dy > 0 {
+		return 2, 0 // source bottom → target top
+	}
+	return 0, 2 // source top → target bottom
 }
 
 // computeConnectionPoints calculates the best edge attachment points between two boxes.
