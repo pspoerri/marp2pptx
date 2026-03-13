@@ -9,8 +9,8 @@ const (
 	emuPerCm    = 360000
 
 	// Standard slide dimensions (10" x 7.5" widescreen)
-	slideWidth  = 10 * emuPerInch      // 9144000
-	slideHeight = 6858000              // 7.5 * 914400
+	slideWidth  = 10 * emuPerInch // 9144000
+	slideHeight = 6858000         // 7.5 * 914400
 
 	// Content area with margins
 	marginLeft    = emuPerInch / 2           // 0.5"

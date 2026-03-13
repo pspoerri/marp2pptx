@@ -12,13 +12,21 @@ import (
 	"github.com/pascal/marp2pptx/internal/pptx"
 )
 
+var version = "dev"
+
 func main() {
 	output := flag.String("o", "", "output .pptx file path")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: marp2pptx [flags] <input.md>\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	if flag.NArg() < 1 {
 		flag.Usage()
