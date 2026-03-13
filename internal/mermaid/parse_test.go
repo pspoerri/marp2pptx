@@ -7,6 +7,9 @@ func TestParse_SimpleGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse failed: %v", err)
 	}
+	if g.Type != DiagramFlowchart {
+		t.Errorf("expected flowchart type, got %d", g.Type)
+	}
 	if g.Direction != "LR" {
 		t.Errorf("expected direction LR, got %q", g.Direction)
 	}
@@ -44,11 +47,6 @@ func TestParse_NodeShapes(t *testing.T) {
 		t.Fatalf("Parse failed: %v", err)
 	}
 
-	shapes := make(map[string]NodeShape)
-	for _, n := range g.Nodes {
-		shapes[n.ID] = n.Shape
-	}
-
 	tests := []struct {
 		id    string
 		shape NodeShape
@@ -74,6 +72,40 @@ func TestParse_NodeShapes(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("node %s not found", tt.id)
+		}
+	}
+}
+
+func TestParse_ExtendedNodeShapes(t *testing.T) {
+	tests := []struct {
+		input string
+		id    string
+		shape NodeShape
+		label string
+	}{
+		{"A([Stadium])", "A", ShapeStadium, "Stadium"},
+		{"B[[Subroutine]]", "B", ShapeSubroutine, "Subroutine"},
+		{"C[(Database)]", "C", ShapeCylinder, "Database"},
+		{"D(((Double)))", "D", ShapeDoubleCircle, "Double"},
+		{"E{{Hexagon}}", "E", ShapeHexagon, "Hexagon"},
+	}
+	for _, tt := range tests {
+		g, err := Parse("graph LR\n    " + tt.input)
+		if err != nil {
+			t.Fatalf("Parse %q failed: %v", tt.input, err)
+		}
+		if len(g.Nodes) == 0 {
+			t.Fatalf("Parse %q: no nodes", tt.input)
+		}
+		n := g.Nodes[0]
+		if n.ID != tt.id {
+			t.Errorf("Parse %q: expected id %q, got %q", tt.input, tt.id, n.ID)
+		}
+		if n.Shape != tt.shape {
+			t.Errorf("Parse %q: expected shape %d, got %d", tt.input, tt.shape, n.Shape)
+		}
+		if n.Label != tt.label {
+			t.Errorf("Parse %q: expected label %q, got %q", tt.input, tt.label, n.Label)
 		}
 	}
 }
@@ -161,15 +193,6 @@ func TestParse_Comments(t *testing.T) {
 	}
 }
 
-func TestParse_SequenceDiagram(t *testing.T) {
-	// Sequence diagrams aren't flowcharts - should return error or minimal result
-	_, err := Parse("sequenceDiagram\n    Alice->>Bob: Hello")
-	// We only support graph/flowchart for now
-	if err == nil {
-		// It's ok if it doesn't error - it might just produce no meaningful graph
-	}
-}
-
 func TestParse_NoArrow(t *testing.T) {
 	g, err := Parse("graph LR\n    A --- B")
 	if err != nil {
@@ -183,8 +206,118 @@ func TestParse_NoArrow(t *testing.T) {
 	}
 }
 
-func TestComputeLayout(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Sequence diagram tests
+// ---------------------------------------------------------------------------
+
+func TestParse_SequenceDiagram(t *testing.T) {
+	input := `sequenceDiagram
+    Alice->>Bob: Hello Bob
+    Bob-->>Alice: Hi Alice`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if g.Type != DiagramSequence {
+		t.Fatalf("expected sequence diagram type, got %d", g.Type)
+	}
+	if g.Sequence == nil {
+		t.Fatal("expected non-nil Sequence")
+	}
+	if len(g.Sequence.Participants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(g.Sequence.Participants))
+	}
+	if g.Sequence.Participants[0].ID != "Alice" {
+		t.Errorf("expected first participant 'Alice', got %q", g.Sequence.Participants[0].ID)
+	}
+	if g.Sequence.Participants[1].ID != "Bob" {
+		t.Errorf("expected second participant 'Bob', got %q", g.Sequence.Participants[1].ID)
+	}
+	if len(g.Sequence.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(g.Sequence.Messages))
+	}
+	m := g.Sequence.Messages[0]
+	if m.From != "Alice" || m.To != "Bob" || m.Label != "Hello Bob" {
+		t.Errorf("unexpected message: %+v", m)
+	}
+	if m.Style != MsgSolidArrow {
+		t.Errorf("expected solid arrow, got %d", m.Style)
+	}
+	m2 := g.Sequence.Messages[1]
+	if m2.Style != MsgDottedArrow {
+		t.Errorf("expected dotted arrow, got %d", m2.Style)
+	}
+}
+
+func TestParse_SequenceWithParticipants(t *testing.T) {
+	input := `sequenceDiagram
+    participant A as Alice
+    participant B as Bob
+    A->>B: Hello`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(g.Sequence.Participants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(g.Sequence.Participants))
+	}
+	if g.Sequence.Participants[0].Label != "Alice" {
+		t.Errorf("expected label 'Alice', got %q", g.Sequence.Participants[0].Label)
+	}
+	if g.Sequence.Participants[1].Label != "Bob" {
+		t.Errorf("expected label 'Bob', got %q", g.Sequence.Participants[1].Label)
+	}
+}
+
+func TestParse_SequenceArrowTypes(t *testing.T) {
+	tests := []struct {
+		arrow string
+		style MessageStyle
+	}{
+		{"->", MsgSolid},
+		{"-->", MsgDotted},
+		{"->>", MsgSolidArrow},
+		{"-->>", MsgDottedArrow},
+		{"-x", MsgSolidCross},
+		{"--x", MsgDottedCross},
+		{"-)", MsgSolidAsync},
+		{"--)", MsgDottedAsync},
+	}
+	for _, tt := range tests {
+		input := "sequenceDiagram\n    A" + tt.arrow + "B: msg"
+		g, err := Parse(input)
+		if err != nil {
+			t.Fatalf("Parse %q failed: %v", tt.arrow, err)
+		}
+		if len(g.Sequence.Messages) != 1 {
+			t.Fatalf("Parse %q: expected 1 message, got %d", tt.arrow, len(g.Sequence.Messages))
+		}
+		if g.Sequence.Messages[0].Style != tt.style {
+			t.Errorf("Parse %q: expected style %d, got %d", tt.arrow, tt.style, g.Sequence.Messages[0].Style)
+		}
+	}
+}
+
+func TestParse_SequenceSkipsControlFlow(t *testing.T) {
+	input := `sequenceDiagram
+    Alice->>Bob: Hello
+    loop Every minute
+        Bob->>Alice: Ping
+    end
+    Alice-->>Bob: Done`
+	g, err := Parse(input)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	// Should have 3 messages (loop/end skipped)
+	if len(g.Sequence.Messages) != 3 {
+		t.Errorf("expected 3 messages, got %d", len(g.Sequence.Messages))
+	}
+}
+
+func TestComputeLayout_Flowchart(t *testing.T) {
 	g := Graph{
+		Type:      DiagramFlowchart,
 		Direction: "LR",
 		Nodes: []Node{
 			{ID: "A", Label: "Start", Shape: ShapeRect},
@@ -194,12 +327,45 @@ func TestComputeLayout(t *testing.T) {
 			{From: "A", To: "B", Arrow: true},
 		},
 	}
-	layout := ComputeLayout(g, 8229600, 6001200) // contentWidth x contentHeight
+	layout := ComputeLayout(g, 8229600, 6001200)
 	if len(layout.Nodes) != 2 {
 		t.Fatalf("expected 2 layout nodes, got %d", len(layout.Nodes))
 	}
-	// In LR layout, A should be left of B
 	if layout.Nodes[0].X >= layout.Nodes[1].X {
 		t.Errorf("expected A.X < B.X, got %d >= %d", layout.Nodes[0].X, layout.Nodes[1].X)
+	}
+}
+
+func TestComputeLayout_Sequence(t *testing.T) {
+	g := Graph{
+		Type: DiagramSequence,
+		Sequence: &SequenceDiagram{
+			Participants: []Participant{
+				{ID: "A", Label: "Alice"},
+				{ID: "B", Label: "Bob"},
+			},
+			Messages: []Message{
+				{From: "A", To: "B", Label: "Hello", Style: MsgSolidArrow},
+			},
+		},
+	}
+	layout := ComputeLayout(g, 8229600, 6001200)
+	if layout.Sequence == nil {
+		t.Fatal("expected non-nil sequence layout")
+	}
+	if len(layout.Sequence.Participants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(layout.Sequence.Participants))
+	}
+	// Alice should be to the left of Bob
+	if layout.Sequence.Participants[0].X >= layout.Sequence.Participants[1].X {
+		t.Error("expected Alice.X < Bob.X")
+	}
+	if len(layout.Sequence.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(layout.Sequence.Messages))
+	}
+	// Message should go from Alice's lifeline to Bob's lifeline
+	m := layout.Sequence.Messages[0]
+	if m.FromX >= m.ToX {
+		t.Error("expected message FromX < ToX")
 	}
 }

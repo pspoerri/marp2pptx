@@ -177,10 +177,10 @@ func TestIntegration_MermaidDiagram(t *testing.T) {
 		t.Fatalf("output file not created: %v", err)
 	}
 
-	// 4 slides: title, flowchart, sequence, mixed
+	// 7 slides in mermaid.md
 	count := pptxSlideCount(t, outPath)
-	if count != 4 {
-		t.Errorf("expected 4 slides, got %d", count)
+	if count != 7 {
+		t.Errorf("expected 7 slides, got %d", count)
 	}
 }
 

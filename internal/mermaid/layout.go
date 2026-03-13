@@ -8,27 +8,41 @@ const (
 	nodeH    = emuPerInch / 2 // 0.5 inches tall
 	nodeGapX = emuPerInch / 2 // horizontal gap between nodes
 	nodeGapY = emuPerInch / 2 // vertical gap between nodes
+
+	// Sequence diagram sizing
+	seqParticipantW   = emuPerInch * 3 / 2 // 1.5 inches
+	seqParticipantH   = emuPerInch / 2     // 0.5 inches
+	seqParticipantGap = emuPerInch / 2     // gap between participants
+	seqMessageGap     = emuPerInch / 2     // vertical gap between messages
 )
 
 // ComputeLayout assigns positions to all nodes and edges in the graph.
 // The layout fits within the given bounding box (maxW x maxH in EMU).
 func ComputeLayout(g Graph, maxW, maxH int) Layout {
+	if g.Type == DiagramSequence && g.Sequence != nil {
+		return computeSequenceLayout(g, maxW, maxH)
+	}
+	return computeFlowchartLayout(g, maxW, maxH)
+}
+
+// ---------------------------------------------------------------------------
+// Flowchart layout
+// ---------------------------------------------------------------------------
+
+func computeFlowchartLayout(g Graph, maxW, maxH int) Layout {
 	if len(g.Nodes) == 0 {
 		return Layout{}
 	}
 
-	// Build adjacency info
 	nodeIndex := make(map[string]int)
 	for i, n := range g.Nodes {
 		nodeIndex[n.ID] = i
 	}
 
-	// Assign layers using longest-path from sources
 	layers := assignLayers(g, nodeIndex)
 
-	// Group nodes by layer
 	maxLayer := 0
-	layerNodes := make(map[int][]int) // layer -> node indices
+	layerNodes := make(map[int][]int)
 	for i, layer := range layers {
 		layerNodes[layer] = append(layerNodes[layer], i)
 		if layer > maxLayer {
@@ -47,10 +61,8 @@ func ComputeLayout(g Graph, maxW, maxH int) Layout {
 	horizontal := g.Direction == "LR" || g.Direction == "RL"
 	reverse := g.Direction == "RL" || g.Direction == "BT"
 
-	// Compute node size to fit within bounds
 	nw, nh := fitNodeSize(numLayers, maxPerLayer, horizontal, maxW, maxH)
 
-	// Compute gaps
 	var gapMain, gapCross int
 	if horizontal {
 		gapMain = (maxW - numLayers*nw) / (numLayers + 1)
@@ -70,7 +82,6 @@ func ComputeLayout(g Graph, maxW, maxH int) Layout {
 		gapCross = nodeGapX / 2
 	}
 
-	// Position nodes
 	layoutNodes := make([]LayoutNode, len(g.Nodes))
 	for layer := 0; layer <= maxLayer; layer++ {
 		indices := layerNodes[layer]
@@ -103,7 +114,6 @@ func ComputeLayout(g Graph, maxW, maxH int) Layout {
 		}
 	}
 
-	// Build layout edges with node references
 	layoutEdges := make([]LayoutEdge, len(g.Edges))
 	for i, e := range g.Edges {
 		var from, to LayoutNode
@@ -121,6 +131,7 @@ func ComputeLayout(g Graph, maxW, maxH int) Layout {
 	}
 
 	return Layout{
+		Type:  DiagramFlowchart,
 		Nodes: layoutNodes,
 		Edges: layoutEdges,
 		W:     maxW,
@@ -128,7 +139,6 @@ func ComputeLayout(g Graph, maxW, maxH int) Layout {
 	}
 }
 
-// assignLayers uses BFS from source nodes (no incoming edges) to assign layers.
 func assignLayers(g Graph, nodeIndex map[string]int) []int {
 	n := len(g.Nodes)
 	layers := make([]int, n)
@@ -140,7 +150,6 @@ func assignLayers(g Graph, nodeIndex map[string]int) []int {
 		}
 	}
 
-	// Build adjacency list
 	adj := make([][]int, n)
 	for _, e := range g.Edges {
 		fi, fok := nodeIndex[e.From]
@@ -150,16 +159,12 @@ func assignLayers(g Graph, nodeIndex map[string]int) []int {
 		}
 	}
 
-	// BFS from sources
 	queue := make([]int, 0)
 	for i := 0; i < n; i++ {
 		if !hasIncoming[i] {
 			queue = append(queue, i)
-			layers[i] = 0
 		}
 	}
-
-	// If no sources found (cycle), start from first node
 	if len(queue) == 0 {
 		queue = append(queue, 0)
 	}
@@ -187,13 +192,11 @@ func assignLayers(g Graph, nodeIndex map[string]int) []int {
 	return layers
 }
 
-// fitNodeSize computes node width and height to fit within the bounding box.
 func fitNodeSize(numLayers, maxPerLayer int, horizontal bool, maxW, maxH int) (nw, nh int) {
 	nw = nodeW
 	nh = nodeH
 
 	if horizontal {
-		// layers go along X, nodes per layer along Y
 		availW := maxW - (numLayers+1)*(nodeGapX/4)
 		if w := availW / numLayers; w < nw {
 			nw = w
@@ -203,7 +206,6 @@ func fitNodeSize(numLayers, maxPerLayer int, horizontal bool, maxW, maxH int) (n
 			nh = h
 		}
 	} else {
-		// layers go along Y, nodes per layer along X
 		availH := maxH - (numLayers+1)*(nodeGapY/4)
 		if h := availH / numLayers; h < nh {
 			nh = h
@@ -214,7 +216,6 @@ func fitNodeSize(numLayers, maxPerLayer int, horizontal bool, maxW, maxH int) (n
 		}
 	}
 
-	// Enforce minimums
 	if nw < emuPerInch/2 {
 		nw = emuPerInch / 2
 	}
@@ -223,4 +224,104 @@ func fitNodeSize(numLayers, maxPerLayer int, horizontal bool, maxW, maxH int) (n
 	}
 
 	return nw, nh
+}
+
+// ---------------------------------------------------------------------------
+// Sequence diagram layout
+// ---------------------------------------------------------------------------
+
+func computeSequenceLayout(g Graph, maxW, maxH int) Layout {
+	seq := g.Sequence
+	if len(seq.Participants) == 0 {
+		return Layout{}
+	}
+
+	numP := len(seq.Participants)
+	numM := len(seq.Messages)
+
+	// Compute participant box width to fit all across
+	pw := seqParticipantW
+	totalNeeded := numP*pw + (numP-1)*seqParticipantGap
+	if totalNeeded > maxW {
+		pw = (maxW - (numP-1)*seqParticipantGap) / numP
+		if pw < emuPerInch/2 {
+			pw = emuPerInch / 2
+		}
+	}
+
+	ph := seqParticipantH
+	gap := seqParticipantGap
+
+	// Recalculate total width and center
+	totalW := numP*pw + (numP-1)*gap
+	startX := (maxW - totalW) / 2
+
+	// Vertical spacing for messages
+	topY := 0
+	msgStartY := topY + ph + seqMessageGap/2
+	msgGap := seqMessageGap
+	if numM > 0 {
+		availH := maxH - ph - seqMessageGap
+		if computed := availH / (numM + 1); computed < msgGap {
+			msgGap = computed
+		}
+		if msgGap < emuPerInch/6 {
+			msgGap = emuPerInch / 6
+		}
+	}
+
+	lifelineBot := msgStartY + numM*msgGap + seqMessageGap/2
+
+	// Build participant index
+	pIndex := make(map[string]int)
+	for i, p := range seq.Participants {
+		pIndex[p.ID] = i
+	}
+
+	// Position participants
+	pLayouts := make([]SeqParticipantLayout, numP)
+	for i, p := range seq.Participants {
+		x := startX + i*(pw+gap)
+		centerX := x + pw/2
+		pLayouts[i] = SeqParticipantLayout{
+			Participant:  p,
+			X:            x,
+			Y:            topY,
+			W:            pw,
+			H:            ph,
+			LifelineX:    centerX,
+			LifelineTopY: topY + ph,
+			LifelineBotY: lifelineBot,
+		}
+	}
+
+	// Position messages
+	mLayouts := make([]SeqMessageLayout, numM)
+	for i, msg := range seq.Messages {
+		y := msgStartY + i*msgGap
+		fromX := 0
+		toX := 0
+		if fi, ok := pIndex[msg.From]; ok {
+			fromX = pLayouts[fi].LifelineX
+		}
+		if ti, ok := pIndex[msg.To]; ok {
+			toX = pLayouts[ti].LifelineX
+		}
+		mLayouts[i] = SeqMessageLayout{
+			Message: msg,
+			FromX:   fromX,
+			ToX:     toX,
+			Y:       y,
+		}
+	}
+
+	return Layout{
+		Type: DiagramSequence,
+		Sequence: &SequenceLayout{
+			Participants: pLayouts,
+			Messages:     mLayouts,
+		},
+		W: maxW,
+		H: maxH,
+	}
 }

@@ -464,24 +464,29 @@ func renderCodeBlock(cb markdown.CodeBlock) string {
 // Returns the XML and the next available shape ID.
 func renderDiagramShapes(d markdown.Diagram, startID, x, y, cx, cy int) (string, int) {
 	layout := mermaid.ComputeLayout(d.Graph, cx, cy)
+
+	if layout.Type == mermaid.DiagramSequence && layout.Sequence != nil {
+		return renderSequenceDiagram(layout, startID, x, y)
+	}
+	return renderFlowchartDiagram(layout, startID, x, y)
+}
+
+func renderFlowchartDiagram(layout mermaid.Layout, startID, x, y int) (string, int) {
 	var sb strings.Builder
 	id := startID
 
-	// Render nodes as shapes
-	nodeIDMap := make(map[string]int) // node ID -> shape ID for connector refs
+	nodeIDMap := make(map[string]int)
 	for _, ln := range layout.Nodes {
 		nodeIDMap[ln.ID] = id
 		sb.WriteString(renderDiagramNode(ln, id, x, y))
 		id++
 	}
 
-	// Render edges as connector shapes
 	for _, le := range layout.Edges {
 		fromShapeID := nodeIDMap[le.From]
 		toShapeID := nodeIDMap[le.To]
 		sb.WriteString(renderDiagramEdge(le, id, x, y, fromShapeID, toShapeID))
 		id++
-		// If edge has a label, render it as a text box
 		if le.Label != "" {
 			sb.WriteString(renderEdgeLabel(le, id, x, y))
 			id++
@@ -494,19 +499,23 @@ func renderDiagramShapes(d markdown.Diagram, startID, x, y, cx, cy int) (string,
 // prstGeomForShape maps mermaid node shapes to OOXML preset geometry names.
 func prstGeomForShape(s mermaid.NodeShape) string {
 	switch s {
-	case mermaid.ShapeRound:
+	case mermaid.ShapeRound, mermaid.ShapeStadium:
 		return "roundRect"
 	case mermaid.ShapeDiamond:
 		return "diamond"
-	case mermaid.ShapeCircle:
+	case mermaid.ShapeCircle, mermaid.ShapeDoubleCircle:
 		return "ellipse"
-	case mermaid.ShapeStadium:
-		return "roundRect"
+	case mermaid.ShapeSubroutine:
+		return "flowChartPredefinedProcess"
+	case mermaid.ShapeCylinder:
+		return "can"
+	case mermaid.ShapeAsymmetric:
+		return "homePlate"
 	case mermaid.ShapeHexagon:
 		return "hexagon"
-	case mermaid.ShapeParallel:
+	case mermaid.ShapeParallel, mermaid.ShapeParallelAlt:
 		return "parallelogram"
-	case mermaid.ShapeTrapezoid:
+	case mermaid.ShapeTrapezoid, mermaid.ShapeTrapezoidAlt:
 		return "trapezoid"
 	default:
 		return "rect"
@@ -690,6 +699,223 @@ func renderEdgeLabel(le mermaid.LayoutEdge, id, offX, offY int) string {
         </p:txBody>
       </p:sp>
 `, id, midX-labelW/2, midY-labelH/2, labelW, labelH, halfPt(10), escapeXML(le.Label))
+}
+
+// ---------------------------------------------------------------------------
+// Sequence diagram rendering
+// ---------------------------------------------------------------------------
+
+func renderSequenceDiagram(layout mermaid.Layout, startID, offX, offY int) (string, int) {
+	seq := layout.Sequence
+	var sb strings.Builder
+	id := startID
+
+	// Render participant boxes
+	for _, p := range seq.Participants {
+		sb.WriteString(renderSeqParticipant(p, id, offX, offY))
+		id++
+	}
+
+	// Render lifelines (dashed vertical lines)
+	for _, p := range seq.Participants {
+		sb.WriteString(renderSeqLifeline(p, id, offX, offY))
+		id++
+	}
+
+	// Render messages (horizontal arrows with labels)
+	for _, m := range seq.Messages {
+		sb.WriteString(renderSeqMessage(m, id, offX, offY))
+		id++
+		// Message label
+		sb.WriteString(renderSeqMessageLabel(m, id, offX, offY))
+		id++
+	}
+
+	return sb.String(), id
+}
+
+func renderSeqParticipant(p mermaid.SeqParticipantLayout, id, offX, offY int) string {
+	fontSize := 12
+	if len(p.Label) > 15 {
+		fontSize = 10
+	}
+
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Participant %s"/>
+          <p:cNvSpPr/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          <a:solidFill><a:srgbClr val="4472C4"/></a:solidFill>
+          <a:ln w="12700"><a:solidFill><a:srgbClr val="2F5496"/></a:solidFill></a:ln>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="ctr" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+            <a:r><a:rPr lang="en-US" sz="%d" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>%s</a:t></a:r>
+          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, escapeXML(p.ID), offX+p.X, offY+p.Y, p.W, p.H, halfPt(fontSize), escapeXML(p.Label))
+}
+
+func renderSeqLifeline(p mermaid.SeqParticipantLayout, id, offX, offY int) string {
+	x := offX + p.LifelineX
+	y1 := offY + p.LifelineTopY
+	y2 := offY + p.LifelineBotY
+	cy := y2 - y1
+	if cy <= 0 {
+		cy = 1
+	}
+
+	return fmt.Sprintf(`      <p:cxnSp>
+        <p:nvCxnSpPr>
+          <p:cNvPr id="%d" name="Lifeline %s"/>
+          <p:cNvCxnSpPr/>
+          <p:nvPr/>
+        </p:nvCxnSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="0" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:ln w="9525">
+            <a:solidFill><a:srgbClr val="808080"/></a:solidFill>
+            <a:prstDash val="dash"/>
+          </a:ln>
+        </p:spPr>
+      </p:cxnSp>
+`, id, escapeXML(p.ID), x, y1, cy)
+}
+
+func renderSeqMessage(m mermaid.SeqMessageLayout, id, offX, offY int) string {
+	x1 := offX + m.FromX
+	x2 := offX + m.ToX
+	y := offY + m.Y
+
+	minX := x1
+	cx := x2 - x1
+	flipH := ""
+	if cx < 0 {
+		minX = x2
+		cx = -cx
+		flipH = ` flipH="1"`
+	}
+	if cx == 0 {
+		cx = 1
+	}
+
+	// Line style based on message type
+	lineW := 12700
+	dashXML := ""
+	tailEnd := ""
+
+	switch m.Style {
+	case mermaid.MsgSolid:
+		// solid, no arrow
+	case mermaid.MsgDotted:
+		dashXML = `<a:prstDash val="dash"/>`
+	case mermaid.MsgSolidArrow:
+		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
+	case mermaid.MsgDottedArrow:
+		dashXML = `<a:prstDash val="dash"/>`
+		tailEnd = `<a:tailEnd type="triangle" w="med" len="med"/>`
+	case mermaid.MsgSolidCross:
+		tailEnd = `<a:tailEnd type="diamond" w="med" len="med"/>`
+	case mermaid.MsgDottedCross:
+		dashXML = `<a:prstDash val="dash"/>`
+		tailEnd = `<a:tailEnd type="diamond" w="med" len="med"/>`
+	case mermaid.MsgSolidAsync:
+		tailEnd = `<a:tailEnd type="arrow" w="med" len="med"/>`
+	case mermaid.MsgDottedAsync:
+		dashXML = `<a:prstDash val="dash"/>`
+		tailEnd = `<a:tailEnd type="arrow" w="med" len="med"/>`
+	}
+
+	return fmt.Sprintf(`      <p:cxnSp>
+        <p:nvCxnSpPr>
+          <p:cNvPr id="%d" name="Message %d"/>
+          <p:cNvCxnSpPr/>
+          <p:nvPr/>
+        </p:nvCxnSpPr>
+        <p:spPr>
+          <a:xfrm%s>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="0"/>
+          </a:xfrm>
+          <a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+          <a:ln w="%d">
+            <a:solidFill><a:srgbClr val="2F5496"/></a:solidFill>
+            %s%s
+          </a:ln>
+        </p:spPr>
+      </p:cxnSp>
+`, id, id, flipH, minX, y, cx, lineW, dashXML, tailEnd)
+}
+
+func renderSeqMessageLabel(m mermaid.SeqMessageLayout, id, offX, offY int) string {
+	if m.Label == "" {
+		return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Label"/>
+          <p:cNvSpPr txBox="1"/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="0" y="0"/>
+            <a:ext cx="0" cy="0"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          <a:noFill/>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr/>
+          <a:lstStyle/>
+          <a:p><a:endParaRPr lang="en-US"/></a:p>
+        </p:txBody>
+      </p:sp>
+`, id)
+	}
+
+	midX := offX + (m.FromX+m.ToX)/2
+	labelW := len(m.Label)*emuPerPoint*7 + emuPerInch/4
+	labelH := emuPerInch / 4
+	y := offY + m.Y - labelH - emuPerPoint*4
+
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Label"/>
+          <p:cNvSpPr txBox="1"/>
+          <p:nvPr/>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+          <a:noFill/>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="b" anchorCtr="1"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+            <a:r><a:rPr lang="en-US" sz="%d" dirty="0"/><a:t>%s</a:t></a:r>
+          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, midX-labelW/2, y, labelW, labelH, halfPt(10), escapeXML(m.Label))
 }
 
 func abs(x int) int {
