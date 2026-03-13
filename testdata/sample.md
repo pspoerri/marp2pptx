@@ -28,6 +28,15 @@ func main() {
 
 ---
 
+## Comparison
+
+| Feature | marp2pptx | Manual |
+| --- | --- | --- |
+| Speed | Fast | Slow |
+| Consistency | High | Variable |
+
+---
+
 <!-- _backgroundColor: #264653 -->
 <!-- _color: #ffffff -->
 

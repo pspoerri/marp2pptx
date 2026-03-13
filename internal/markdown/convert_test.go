@@ -94,6 +94,39 @@ func TestConvert_CodeBlock(t *testing.T) {
 	}
 }
 
+func TestConvert_Table(t *testing.T) {
+	input := "| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |"
+	blocks, err := Convert(input)
+	if err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d: %+v", len(blocks), blocks)
+	}
+	tbl, ok := blocks[0].(Table)
+	if !ok {
+		t.Fatalf("expected Table, got %T", blocks[0])
+	}
+	if len(tbl.Headers) != 2 {
+		t.Fatalf("expected 2 headers, got %d", len(tbl.Headers))
+	}
+	if tbl.Headers[0].Text() != "Name" {
+		t.Errorf("expected header 'Name', got %q", tbl.Headers[0].Text())
+	}
+	if tbl.Headers[1].Text() != "Age" {
+		t.Errorf("expected header 'Age', got %q", tbl.Headers[1].Text())
+	}
+	if len(tbl.Rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(tbl.Rows))
+	}
+	if tbl.Rows[0][0].Text() != "Alice" {
+		t.Errorf("expected 'Alice', got %q", tbl.Rows[0][0].Text())
+	}
+	if tbl.Rows[1][1].Text() != "25" {
+		t.Errorf("expected '25', got %q", tbl.Rows[1][1].Text())
+	}
+}
+
 func TestConvert_BackgroundImage(t *testing.T) {
 	blocks, err := Convert("![bg](image.jpg)")
 	if err != nil {

@@ -1,5 +1,7 @@
 package markdown
 
+import "strings"
+
 // BlockKind identifies the type of content block.
 type BlockKind int
 
@@ -9,6 +11,7 @@ const (
 	BlockList
 	BlockCodeBlock
 	BlockImage
+	BlockTable
 	BlockThematicBreak
 )
 
@@ -71,6 +74,28 @@ type Image struct {
 }
 
 func (i Image) BlockKind() BlockKind { return BlockImage }
+
+// Table represents a markdown table.
+type Table struct {
+	Headers []TableCell
+	Rows    [][]TableCell
+}
+
+func (t Table) BlockKind() BlockKind { return BlockTable }
+
+// TableCell is a single cell containing formatted runs.
+type TableCell struct {
+	Runs []Run
+}
+
+// Text returns the concatenated plain text of the cell.
+func (c TableCell) Text() string {
+	var s strings.Builder
+	for _, r := range c.Runs {
+		s.WriteString(r.Text)
+	}
+	return s.String()
+}
 
 // ThematicBreak is a horizontal rule (not a slide separator).
 type ThematicBreak struct{}

@@ -6,13 +6,15 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
 // Convert parses markdown text and returns content blocks.
 func Convert(source string) ([]ContentBlock, error) {
 	src := []byte(source)
-	md := goldmark.New()
+	md := goldmark.New(goldmark.WithExtensions(extension.Table))
 	reader := text.NewReader(src)
 	doc := md.Parser().Parse(reader)
 
@@ -60,6 +62,9 @@ func convertNode(n ast.Node, src []byte) []ContentBlock {
 	case *ast.ThematicBreak:
 		return []ContentBlock{ThematicBreak{}}
 	default:
+		if n.Kind() == east.KindTable {
+			return []ContentBlock{convertTable(n, src)}
+		}
 		return nil
 	}
 }
@@ -81,6 +86,24 @@ func convertList(node *ast.List, src []byte) List {
 		}
 	}
 	return l
+}
+
+func convertTable(n ast.Node, src []byte) Table {
+	tbl := Table{}
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		var cells []TableCell
+		for cell := child.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			if cell.Kind() == east.KindTableCell {
+				cells = append(cells, TableCell{Runs: extractRuns(cell, src)})
+			}
+		}
+		if child.Kind() == east.KindTableHeader {
+			tbl.Headers = cells
+		} else if child.Kind() == east.KindTableRow {
+			tbl.Rows = append(tbl.Rows, cells)
+		}
+	}
+	return tbl
 }
 
 func extractRuns(n ast.Node, src []byte) []Run {
