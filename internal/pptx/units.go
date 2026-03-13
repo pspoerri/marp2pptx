@@ -17,6 +17,26 @@ const (
 	marginTop     = emuPerInch / 2           // 0.5"
 	contentWidth  = slideWidth - emuPerInch  // 10" - 1" margins
 	contentHeight = slideHeight - emuPerInch // 7.5" - 1" margins
+
+	// Title placeholder (Title and Content layout)
+	titlePlcY  = marginTop
+	titlePlcCY = emuPerInch + emuPerInch/4 // 1.25"
+
+	// Body area (below title in Title and Content layout)
+	bodyAreaY  = titlePlcY + titlePlcCY
+	bodyAreaCY = contentHeight - titlePlcCY
+
+	// Center title (Title Slide layout)
+	ctrTitleX  = emuPerInch                   // 1"
+	ctrTitleY  = slideHeight/3 - emuPerInch/2 // ~2"
+	ctrTitleCX = slideWidth - 2*emuPerInch    // 8"
+	ctrTitleCY = emuPerInch + emuPerInch/4    // 1.25"
+
+	// Subtitle (Title Slide layout)
+	subTitleX  = emuPerInch + emuPerInch/2             // 1.5"
+	subTitleY  = ctrTitleY + ctrTitleCY + emuPerInch/4 // below title + 0.25" gap
+	subTitleCX = slideWidth - 3*emuPerInch             // 7"
+	subTitleCY = emuPerInch                            // 1"
 )
 
 // Pt converts points to EMU.

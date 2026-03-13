@@ -8,6 +8,15 @@ import (
 	"github.com/pspoerri/marp2pptx/internal/mermaid"
 )
 
+// LayoutType identifies which slide layout to use.
+type LayoutType int
+
+const (
+	LayoutTitleSlide   LayoutType = 1 // Centered title + optional subtitle
+	LayoutTitleContent LayoutType = 2 // Title at top + body content below
+	LayoutBlank        LayoutType = 3 // No placeholders (images, diagrams, freeform)
+)
+
 // headingFontSizes maps heading levels to font sizes in points.
 var headingFontSizes = map[int]int{
 	1: 44,
@@ -36,6 +45,73 @@ type segment struct {
 	table     markdown.Table
 	image     markdown.Image
 	diagram   markdown.Diagram
+}
+
+// DetermineLayout decides which slide layout to use based on content and directives.
+func DetermineLayout(blocks []markdown.ContentBlock, class string) LayoutType {
+	if class == "lead" {
+		return LayoutTitleSlide
+	}
+	hasHeading := false
+	otherContent := 0
+	for _, b := range blocks {
+		switch b := b.(type) {
+		case markdown.Heading:
+			hasHeading = true
+		case markdown.Image:
+			if !b.Background {
+				otherContent++
+			}
+		case markdown.ThematicBreak:
+			// ignore
+		default:
+			otherContent++
+		}
+	}
+	if hasHeading && otherContent > 0 {
+		return LayoutTitleContent
+	}
+	if hasHeading {
+		return LayoutTitleSlide
+	}
+	return LayoutBlank
+}
+
+// extractFirstHeading removes the first Heading from blocks and returns it separately.
+func extractFirstHeading(blocks []markdown.ContentBlock) (*markdown.Heading, []markdown.ContentBlock) {
+	for i, b := range blocks {
+		if h, ok := b.(markdown.Heading); ok {
+			rest := make([]markdown.ContentBlock, 0, len(blocks)-1)
+			rest = append(rest, blocks[:i]...)
+			rest = append(rest, blocks[i+1:]...)
+			return &h, rest
+		}
+	}
+	return nil, blocks
+}
+
+// extractTitleAndSubtitle extracts the first heading and the first paragraph
+// from blocks for a title slide layout.
+func extractTitleAndSubtitle(blocks []markdown.ContentBlock) (*markdown.Heading, *markdown.Paragraph, []markdown.ContentBlock) {
+	var title *markdown.Heading
+	var subtitle *markdown.Paragraph
+	rest := make([]markdown.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		if title == nil {
+			if h, ok := b.(markdown.Heading); ok {
+				title = &h
+				continue
+			}
+		}
+		if subtitle == nil && title != nil {
+			if p, ok := b.(markdown.Paragraph); ok {
+				subtitle = &p
+				continue
+			}
+		}
+		rest = append(rest, b)
+	}
+	return title, subtitle, rest
 }
 
 // splitSegments groups blocks into text segments, table segments, and image segments.
@@ -75,50 +151,19 @@ func splitSegments(blocks []markdown.ContentBlock) []segment {
 	return segments
 }
 
-// generateSlideXML produces the XML for a single slide.
-func generateSlideXML(blocks []markdown.ContentBlock, bgColor string, bgImageRef *ImageRef, fgImageRefs []ImageRef) string {
-	segments := splitSegments(blocks)
-	if len(segments) == 0 {
-		segments = []segment{{blocks: nil}}
-	}
-
-	segHeight := contentHeight / len(segments)
-
-	// Build a map from image URL to foreground image ref for lookup
-	fgRefMap := make(map[string]ImageRef)
-	for _, ref := range fgImageRefs {
-		fgRefMap[ref.Image.URL] = ref
-	}
-
-	var shapes strings.Builder
-	shapeID := 2
-	for i, seg := range segments {
-		y := marginTop + i*segHeight
-		if seg.isTable {
-			shapes.WriteString(renderTableFrame(seg.table, shapeID, marginLeft, y, contentWidth, segHeight))
-			shapeID++
-		} else if seg.isImage {
-			if ref, ok := fgRefMap[seg.image.URL]; ok {
-				shapes.WriteString(renderImageShape(ref, shapeID, marginLeft, y, contentWidth, segHeight))
-			}
-			shapeID++
-		} else if seg.isDiagram {
-			xml, nextID := renderDiagramShapes(seg.diagram, shapeID, marginLeft, y, contentWidth, segHeight)
-			shapes.WriteString(xml)
-			shapeID = nextID
-		} else {
-			shapes.WriteString(renderTextShape(seg.blocks, shapeID, marginLeft, y, contentWidth, segHeight))
-			shapeID++
-		}
-	}
-
-	bgXML := ""
+// buildBgXML returns the background XML for a slide.
+func buildBgXML(bgColor string, bgImageRef *ImageRef) string {
 	if bgImageRef != nil {
-		bgXML = fmt.Sprintf(`<p:bg><p:bgPr><a:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>`, bgImageRef.RelID)
-	} else if bgColor != "" {
-		bgXML = fmt.Sprintf(`<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`, strings.TrimPrefix(bgColor, "#"))
+		return fmt.Sprintf(`<p:bg><p:bgPr><a:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:effectLst/></p:bgPr></p:bg>`, bgImageRef.RelID)
 	}
+	if bgColor != "" {
+		return fmt.Sprintf(`<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`, strings.TrimPrefix(bgColor, "#"))
+	}
+	return ""
+}
 
+// wrapSlideXML wraps shapes and background XML into a complete slide XML.
+func wrapSlideXML(bgXML, shapesXML string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -140,7 +185,105 @@ func generateSlideXML(blocks []markdown.ContentBlock, bgColor string, bgImageRef
       </p:grpSpPr>
 %s    </p:spTree>
   </p:cSld>
-</p:sld>`, bgXML, shapes.String())
+</p:sld>`, bgXML, shapesXML)
+}
+
+// buildFgRefMap creates a map from image URL to foreground image ref.
+func buildFgRefMap(fgImageRefs []ImageRef) map[string]ImageRef {
+	m := make(map[string]ImageRef)
+	for _, ref := range fgImageRefs {
+		m[ref.Image.URL] = ref
+	}
+	return m
+}
+
+// renderSegments renders segments into the given area, returning the XML and next shape ID.
+func renderSegments(segments []segment, fgRefMap map[string]ImageRef, shapeID, x, y, cx, cy int, firstTextAsPlaceholder bool) (string, int) {
+	if len(segments) == 0 {
+		return "", shapeID
+	}
+	segHeight := cy / len(segments)
+	var shapes strings.Builder
+	firstText := firstTextAsPlaceholder
+	for i, seg := range segments {
+		segY := y + i*segHeight
+		if seg.isTable {
+			shapes.WriteString(renderTableFrame(seg.table, shapeID, x, segY, cx, segHeight))
+			shapeID++
+		} else if seg.isImage {
+			if ref, ok := fgRefMap[seg.image.URL]; ok {
+				shapes.WriteString(renderImageShape(ref, shapeID, x, segY, cx, segHeight))
+			}
+			shapeID++
+		} else if seg.isDiagram {
+			xml, nextID := renderDiagramShapes(seg.diagram, shapeID, x, segY, cx, segHeight)
+			shapes.WriteString(xml)
+			shapeID = nextID
+		} else {
+			if firstText {
+				shapes.WriteString(renderBodyPlaceholder(seg.blocks, shapeID, x, segY, cx, segHeight))
+				firstText = false
+			} else {
+				shapes.WriteString(renderTextShape(seg.blocks, shapeID, x, segY, cx, segHeight))
+			}
+			shapeID++
+		}
+	}
+	return shapes.String(), shapeID
+}
+
+// generateSlideXML produces the XML for a single slide.
+func generateSlideXML(blocks []markdown.ContentBlock, bgColor string, bgImageRef *ImageRef, fgImageRefs []ImageRef, layout LayoutType) string {
+	bgXML := buildBgXML(bgColor, bgImageRef)
+	fgRefMap := buildFgRefMap(fgImageRefs)
+
+	var shapes strings.Builder
+	shapeID := 2
+
+	switch layout {
+	case LayoutTitleSlide:
+		title, subtitle, remaining := extractTitleAndSubtitle(blocks)
+		if title != nil {
+			shapes.WriteString(renderCenterTitlePlaceholder(*title, shapeID))
+			shapeID++
+		}
+		if subtitle != nil {
+			shapes.WriteString(renderSubtitlePlaceholder(*subtitle, shapeID))
+			shapeID++
+		}
+		// Render any remaining content (images, diagrams) below
+		if len(remaining) > 0 {
+			segments := splitSegments(remaining)
+			remainY := subTitleY + subTitleCY + emuPerInch/4
+			remainCY := slideHeight - remainY - marginTop
+			if remainCY > 0 {
+				xml, nextID := renderSegments(segments, fgRefMap, shapeID, marginLeft, remainY, contentWidth, remainCY, false)
+				shapes.WriteString(xml)
+				shapeID = nextID
+			}
+		}
+
+	case LayoutTitleContent:
+		title, bodyBlocks := extractFirstHeading(blocks)
+		if title != nil {
+			shapes.WriteString(renderTitlePlaceholder(*title, shapeID))
+			shapeID++
+		}
+		bodySegments := splitSegments(bodyBlocks)
+		xml, nextID := renderSegments(bodySegments, fgRefMap, shapeID, marginLeft, bodyAreaY, contentWidth, bodyAreaCY, true)
+		shapes.WriteString(xml)
+		shapeID = nextID
+
+	default: // LayoutBlank
+		segments := splitSegments(blocks)
+		if len(segments) == 0 {
+			segments = []segment{{blocks: nil}}
+		}
+		xml, _ := renderSegments(segments, fgRefMap, shapeID, marginLeft, marginTop, contentWidth, contentHeight, false)
+		shapes.WriteString(xml)
+	}
+
+	return wrapSlideXML(bgXML, shapes.String())
 }
 
 // renderImageShape renders an image as a picture shape.
@@ -194,6 +337,157 @@ func fitImage(imgW, imgH, maxCX, maxCY int) (cx, cy int) {
 	}
 
 	return int(float64(emuW) * scale), int(float64(emuH) * scale)
+}
+
+// renderPlaceholderRun renders a run for use inside a placeholder shape.
+// It omits explicit font size to let the layout/theme provide styling.
+func renderPlaceholderRun(r markdown.Run, bold bool) string {
+	attrs := ` lang="en-US" dirty="0"`
+	if r.Bold || bold {
+		attrs += ` b="1"`
+	}
+	if r.Italic {
+		attrs += ` i="1"`
+	}
+	if r.Strikethrough {
+		attrs += ` strike="sngStrike"`
+	}
+	if r.Superscript {
+		attrs += ` baseline="30000"`
+	}
+	fontXML := ""
+	if r.Code {
+		fontXML = `<a:latin typeface="Courier New"/><a:cs typeface="Courier New"/>`
+	}
+	if r.Link != "" {
+		attrs += ` u="sng"`
+	}
+	return fmt.Sprintf(`            <a:r><a:rPr%s>%s</a:rPr><a:t>%s</a:t></a:r>
+`, attrs, fontXML, escapeXML(r.Text))
+}
+
+// renderTitlePlaceholder renders a heading as a title placeholder shape.
+func renderTitlePlaceholder(h markdown.Heading, id int) string {
+	var runs strings.Builder
+	for _, r := range h.Runs {
+		runs.WriteString(renderPlaceholderRun(r, true))
+	}
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Title 1"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="title"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="b"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="l"/>
+%s          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, marginLeft, titlePlcY, contentWidth, titlePlcCY, runs.String())
+}
+
+// renderCenterTitlePlaceholder renders a heading as a centered title placeholder.
+func renderCenterTitlePlaceholder(h markdown.Heading, id int) string {
+	var runs strings.Builder
+	for _, r := range h.Runs {
+		runs.WriteString(renderPlaceholderRun(r, true))
+	}
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Title 1"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="ctrTitle"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="ctr"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+%s          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, ctrTitleX, ctrTitleY, ctrTitleCX, ctrTitleCY, runs.String())
+}
+
+// renderSubtitlePlaceholder renders a paragraph as a subtitle placeholder.
+func renderSubtitlePlaceholder(p markdown.Paragraph, id int) string {
+	var runs strings.Builder
+	for _, r := range p.Runs {
+		runs.WriteString(renderPlaceholderRun(r, false))
+	}
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Subtitle 2"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="subTitle" idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="t"/>
+          <a:lstStyle/>
+          <a:p>
+            <a:pPr algn="ctr"/>
+%s          </a:p>
+        </p:txBody>
+      </p:sp>
+`, id, subTitleX, subTitleY, subTitleCX, subTitleCY, runs.String())
+}
+
+// renderBodyPlaceholder renders text blocks into a body/content placeholder shape.
+func renderBodyPlaceholder(blocks []markdown.ContentBlock, id, x, y, cx, cy int) string {
+	var body strings.Builder
+	for _, block := range blocks {
+		switch b := block.(type) {
+		case markdown.Heading:
+			body.WriteString(renderHeading(b))
+		case markdown.Paragraph:
+			body.WriteString(renderParagraph(b.Runs, 0, false))
+		case markdown.List:
+			body.WriteString(renderList(b))
+		case markdown.CodeBlock:
+			body.WriteString(renderCodeBlock(b))
+		case markdown.DefinitionList:
+			body.WriteString(renderDefinitionList(b))
+		}
+	}
+	return fmt.Sprintf(`      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="%d" name="Content Placeholder 2"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="t"/>
+          <a:lstStyle/>
+%s        </p:txBody>
+      </p:sp>
+`, id, x, y, cx, cy, body.String())
 }
 
 // renderTextShape renders non-table blocks into a text shape.

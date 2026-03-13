@@ -22,18 +22,25 @@ type SlideContent struct {
 	Directives marp.SlideDirectives
 }
 
+// slideImageData holds image references for a single slide.
+type slideImageData struct {
+	bgRef  *ImageRef
+	fgRefs []ImageRef
+}
+
 // Write creates a PPTX file from converted slide content.
-func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
+// If tpl is non-nil, the template's theme/master/layouts are used.
+func Write(w io.Writer, meta marp.Meta, slides []SlideContent, tpl *TemplateData) error {
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
 	// First pass: collect all images and assign media paths / relationship IDs
-	type slideImageData struct {
-		bgRef  *ImageRef
-		fgRefs []ImageRef
-	}
 	allSlideImages := make([]slideImageData, len(slides))
+	// When using a template, offset media counter to avoid colliding with template media files
 	mediaCounter := 0
+	if tpl != nil {
+		mediaCounter = tpl.maxMediaIndex()
+	}
 
 	for i, slide := range slides {
 		sid := &allSlideImages[i]
@@ -62,6 +69,20 @@ func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
 		}
 	}
 
+	// Determine layout for each slide
+	slideLayouts := make([]LayoutType, len(slides))
+	for i, slide := range slides {
+		slideLayouts[i] = DetermineLayout(slide.Blocks, slide.Directives.Class)
+	}
+
+	if tpl != nil {
+		return writeWithTemplate(zw, meta, slides, allSlideImages, slideLayouts, tpl)
+	}
+	return writeDefault(zw, meta, slides, allSlideImages, slideLayouts)
+}
+
+// writeDefault writes a PPTX with our built-in theme and layouts.
+func writeDefault(zw *zip.Writer, meta marp.Meta, slides []SlideContent, allSlideImages []slideImageData, slideLayouts []LayoutType) error {
 	// [Content_Types].xml
 	if err := addFile(zw, "[Content_Types].xml", contentTypesXML(len(slides))); err != nil {
 		return err
@@ -87,21 +108,79 @@ func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
 		return err
 	}
 
-	// Slide master and layout
+	// Slide master and layouts
 	if err := addFile(zw, "ppt/slideMasters/slideMaster1.xml", slideMasterXML()); err != nil {
 		return err
 	}
 	if err := addFile(zw, "ppt/slideMasters/_rels/slideMaster1.xml.rels", slideMasterRelsXML()); err != nil {
 		return err
 	}
-	if err := addFile(zw, "ppt/slideLayouts/slideLayout1.xml", slideLayoutXML()); err != nil {
+	// Layout 1: Title Slide
+	if err := addFile(zw, "ppt/slideLayouts/slideLayout1.xml", titleSlideLayoutXML()); err != nil {
 		return err
 	}
 	if err := addFile(zw, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", slideLayoutRelsXML()); err != nil {
 		return err
 	}
+	// Layout 2: Title and Content
+	if err := addFile(zw, "ppt/slideLayouts/slideLayout2.xml", titleContentLayoutXML()); err != nil {
+		return err
+	}
+	if err := addFile(zw, "ppt/slideLayouts/_rels/slideLayout2.xml.rels", slideLayoutRelsXML()); err != nil {
+		return err
+	}
+	// Layout 3: Blank
+	if err := addFile(zw, "ppt/slideLayouts/slideLayout3.xml", blankLayoutXML()); err != nil {
+		return err
+	}
+	if err := addFile(zw, "ppt/slideLayouts/_rels/slideLayout3.xml.rels", slideLayoutRelsXML()); err != nil {
+		return err
+	}
 
 	// Slides
+	return writeSlides(zw, meta, slides, allSlideImages, slideLayouts, func(lt LayoutType) string {
+		return fmt.Sprintf("slideLayout%d.xml", int(lt))
+	})
+}
+
+// writeWithTemplate writes a PPTX using files from a template.
+func writeWithTemplate(zw *zip.Writer, meta marp.Meta, slides []SlideContent, allSlideImages []slideImageData, slideLayouts []LayoutType, tpl *TemplateData) error {
+	// Write all template files (theme, masters, layouts, media, etc.)
+	for name, data := range tpl.Files {
+		if err := addFileBytes(zw, name, data); err != nil {
+			return err
+		}
+	}
+
+	// Generate metadata files incorporating template's non-slide entries
+	if err := addFile(zw, "[Content_Types].xml", tpl.contentTypesXML(len(slides))); err != nil {
+		return err
+	}
+	// Use template's original _rels/.rels (preserves docProps, thumbnail, etc.)
+	if tpl.origRootRels != nil {
+		if err := addFileBytes(zw, "_rels/.rels", tpl.origRootRels); err != nil {
+			return err
+		}
+	} else {
+		if err := addFile(zw, "_rels/.rels", topRelsXML()); err != nil {
+			return err
+		}
+	}
+	if err := addFile(zw, "ppt/presentation.xml", tpl.presentationXML(len(slides))); err != nil {
+		return err
+	}
+	if err := addFile(zw, "ppt/_rels/presentation.xml.rels", tpl.presentationRelsXML(len(slides))); err != nil {
+		return err
+	}
+
+	// Slides
+	return writeSlides(zw, meta, slides, allSlideImages, slideLayouts, func(lt LayoutType) string {
+		return tpl.LayoutFile(lt)
+	})
+}
+
+// writeSlides writes slide XML, rels, and embedded images.
+func writeSlides(zw *zip.Writer, meta marp.Meta, slides []SlideContent, allSlideImages []slideImageData, slideLayouts []LayoutType, layoutFile func(LayoutType) string) error {
 	for i, slide := range slides {
 		sid := allSlideImages[i]
 
@@ -121,18 +200,19 @@ func Write(w io.Writer, meta marp.Meta, slides []SlideContent) error {
 		if bgColor == "" {
 			bgColor = meta.BackgroundColor
 		}
-		slideXML := generateSlideXML(slide.Blocks, bgColor, sid.bgRef, sid.fgRefs)
+		layout := slideLayouts[i]
+		slideXML := generateSlideXML(slide.Blocks, bgColor, sid.bgRef, sid.fgRefs, layout)
 		slidePath := fmt.Sprintf("ppt/slides/slide%d.xml", i+1)
 		if err := addFile(zw, slidePath, slideXML); err != nil {
 			return err
 		}
 
 		relsPath := fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", i+1)
-		if err := addFile(zw, relsPath, slideRelsXMLWithImages(sid.bgRef, sid.fgRefs)); err != nil {
+		lf := layoutFile(layout)
+		if err := addFile(zw, relsPath, slideRelsXMLWithImages(lf, sid.bgRef, sid.fgRefs)); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -175,6 +255,10 @@ func imageDimensions(data []byte) (width, height int) {
 	return cfg.Width, cfg.Height
 }
 
+// ---------------------------------------------------------------------------
+// Default boilerplate XML generation
+// ---------------------------------------------------------------------------
+
 func contentTypesXML(slideCount int) string {
 	var overrides strings.Builder
 	for i := 1; i <= slideCount; i++ {
@@ -193,6 +277,8 @@ func contentTypesXML(slideCount int) string {
   <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
   <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
   <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout3.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
 %s</Types>`, overrides.String())
 }
 
@@ -241,10 +327,10 @@ func presentationRelsXML(slideCount int) string {
 %s</Relationships>`, rels.String())
 }
 
-func slideRelsXMLWithImages(bgRef *ImageRef, fgRefs []ImageRef) string {
+func slideRelsXMLWithImages(layoutFile string, bgRef *ImageRef, fgRefs []ImageRef) string {
 	var rels strings.Builder
-	rels.WriteString(`  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-`)
+	rels.WriteString(fmt.Sprintf(`  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/%s"/>
+`, layoutFile))
 	if bgRef != nil {
 		rels.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/%s"/>
 `, bgRef.RelID, path.Base(bgRef.MediaPath)))
@@ -257,6 +343,10 @@ func slideRelsXMLWithImages(bgRef *ImageRef, fgRefs []ImageRef) string {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 %s</Relationships>`, rels.String())
 }
+
+// ---------------------------------------------------------------------------
+// Slide master and layouts
+// ---------------------------------------------------------------------------
 
 func slideMasterXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -288,8 +378,40 @@ func slideMasterXML() string {
   </p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2"
             accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:txStyles>
+    <p:titleStyle>
+      <a:lvl1pPr algn="l">
+        <a:defRPr sz="4400" b="1" kern="1200">
+          <a:solidFill><a:schemeClr val="tx1"/></a:solidFill>
+          <a:latin typeface="+mj-lt"/>
+          <a:ea typeface="+mj-ea"/>
+          <a:cs typeface="+mj-cs"/>
+        </a:defRPr>
+      </a:lvl1pPr>
+    </p:titleStyle>
+    <p:bodyStyle>
+      <a:lvl1pPr marL="228600" indent="-228600" algn="l">
+        <a:buChar char="&#x2022;"/>
+        <a:defRPr sz="1800" kern="1200">
+          <a:solidFill><a:schemeClr val="tx1"/></a:solidFill>
+          <a:latin typeface="+mn-lt"/>
+          <a:ea typeface="+mn-ea"/>
+          <a:cs typeface="+mn-cs"/>
+        </a:defRPr>
+      </a:lvl1pPr>
+      <a:lvl2pPr marL="457200" indent="-228600" algn="l">
+        <a:buChar char="&#x2013;"/>
+        <a:defRPr sz="1600" kern="1200">
+          <a:solidFill><a:schemeClr val="tx1"/></a:solidFill>
+          <a:latin typeface="+mn-lt"/>
+        </a:defRPr>
+      </a:lvl2pPr>
+    </p:bodyStyle>
+  </p:txStyles>
   <p:sldLayoutIdLst>
     <p:sldLayoutId id="2147483649" r:id="rId1"/>
+    <p:sldLayoutId id="2147483650" r:id="rId2"/>
+    <p:sldLayoutId id="2147483651" r:id="rId3"/>
   </p:sldLayoutIdLst>
 </p:sldMaster>`
 }
@@ -298,11 +420,158 @@ func slideMasterRelsXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout3.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
 </Relationships>`
 }
 
-func slideLayoutXML() string {
+// titleSlideLayoutXML returns layout 1: Title Slide (centered title + subtitle).
+func titleSlideLayoutXML() string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+             xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             type="ctrTitle">
+  <p:cSld name="Title Slide">
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="2" name="Title 1"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="ctrTitle"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="ctr"/>
+          <a:lstStyle>
+            <a:lvl1pPr algn="ctr">
+              <a:defRPr sz="4400" b="1"/>
+            </a:lvl1pPr>
+          </a:lstStyle>
+          <a:p><a:endParaRPr lang="en-US"/></a:p>
+        </p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="3" name="Subtitle 2"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="subTitle" idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="t"/>
+          <a:lstStyle>
+            <a:lvl1pPr algn="ctr">
+              <a:defRPr sz="2000"/>
+            </a:lvl1pPr>
+          </a:lstStyle>
+          <a:p><a:endParaRPr lang="en-US"/></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sldLayout>`, ctrTitleX, ctrTitleY, ctrTitleCX, ctrTitleCY,
+		subTitleX, subTitleY, subTitleCX, subTitleCY)
+}
+
+// titleContentLayoutXML returns layout 2: Title and Content.
+func titleContentLayoutXML() string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+             xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             type="obj">
+  <p:cSld name="Title and Content">
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+          <a:chOff x="0" y="0"/>
+          <a:chExt cx="0" cy="0"/>
+        </a:xfrm>
+      </p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="2" name="Title 1"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph type="title"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="b"/>
+          <a:lstStyle>
+            <a:lvl1pPr algn="l">
+              <a:defRPr sz="4400" b="1"/>
+            </a:lvl1pPr>
+          </a:lstStyle>
+          <a:p><a:endParaRPr lang="en-US"/></a:p>
+        </p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="3" name="Content Placeholder 2"/>
+          <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+          <p:nvPr><p:ph idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr>
+          <a:xfrm>
+            <a:off x="%d" y="%d"/>
+            <a:ext cx="%d" cy="%d"/>
+          </a:xfrm>
+        </p:spPr>
+        <p:txBody>
+          <a:bodyPr wrap="square" rtlCol="0" anchor="t"/>
+          <a:lstStyle>
+            <a:lvl1pPr>
+              <a:defRPr sz="1800"/>
+            </a:lvl1pPr>
+          </a:lstStyle>
+          <a:p><a:endParaRPr lang="en-US"/></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sldLayout>`, marginLeft, titlePlcY, contentWidth, titlePlcCY,
+		marginLeft, bodyAreaY, contentWidth, bodyAreaCY)
+}
+
+// blankLayoutXML returns layout 3: Blank.
+func blankLayoutXML() string {
 	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"

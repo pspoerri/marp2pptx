@@ -17,6 +17,7 @@ var version = "dev"
 
 func main() {
 	output := flag.String("o", "", "output .pptx file path")
+	themePath := flag.String("theme", "", "path to a .pptx or .potx template file for theming")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: marp2pptx [flags] <input.md>\n\nFlags:\n")
@@ -46,7 +47,7 @@ func main() {
 		}
 	}
 
-	if err := run(inputPath, outputPath); err != nil {
+	if err := run(inputPath, outputPath, *themePath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -54,7 +55,7 @@ func main() {
 	fmt.Printf("Created %s\n", outputPath)
 }
 
-func run(inputPath, outputPath string) error {
+func run(inputPath, outputPath, themePath string) error {
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
@@ -63,6 +64,15 @@ func run(inputPath, outputPath string) error {
 	pres, err := marp.Parse(string(data))
 	if err != nil {
 		return fmt.Errorf("parsing marp: %w", err)
+	}
+
+	// Load template if specified
+	var tpl *pptx.TemplateData
+	if themePath != "" {
+		tpl, err = pptx.LoadTemplate(themePath)
+		if err != nil {
+			return fmt.Errorf("loading theme template: %w", err)
+		}
 	}
 
 	baseDir := filepath.Dir(inputPath)
@@ -90,7 +100,7 @@ func run(inputPath, outputPath string) error {
 	}
 	defer f.Close()
 
-	if err := pptx.Write(f, pres.Meta, slides); err != nil {
+	if err := pptx.Write(f, pres.Meta, slides, tpl); err != nil {
 		return fmt.Errorf("writing pptx: %w", err)
 	}
 
