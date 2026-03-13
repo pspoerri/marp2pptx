@@ -1,0 +1,21 @@
+# Binary
+marp2pptx
+
+# Generated PPTX output
+testdata/*.pptx
+
+# Office lock files
+~$*.pptx
+~$*.potx
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
