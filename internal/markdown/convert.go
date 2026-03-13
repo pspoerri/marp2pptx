@@ -3,6 +3,7 @@ package markdown
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -211,6 +212,9 @@ func walkInlines(n ast.Node, src []byte, bold, italic, code, strikethrough bool,
 		case *ast.String:
 			t := string(node.Value)
 			if t != "" {
+				// Goldmark's Typographer extension emits HTML entities
+				// (e.g. &ldquo;, &hellip;) — decode them to Unicode.
+				t = html.UnescapeString(t)
 				*runs = append(*runs, Run{
 					Text: t, Bold: bold, Italic: italic, Code: code, Link: link,
 					Strikethrough: strikethrough,

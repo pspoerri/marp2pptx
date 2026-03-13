@@ -332,9 +332,6 @@ func fitImage(imgW, imgH, maxCX, maxCY int) (cx, cy int) {
 	if scaleY < scaleX {
 		scale = scaleY
 	}
-	if scale > 1 {
-		scale = 1 // Don't upscale
-	}
 
 	return int(float64(emuW) * scale), int(float64(emuH) * scale)
 }

@@ -230,7 +230,7 @@ func TestConvert_DefinitionList(t *testing.T) {
 }
 
 func TestConvert_Typographer(t *testing.T) {
-	blocks, err := Convert(`She said "hello" and he said 'hi'...`)
+	blocks, err := Convert(`She said "hello"... He replied 'great' -- awesome!`)
 	if err != nil {
 		t.Fatalf("Convert failed: %v", err)
 	}
@@ -242,11 +242,23 @@ func TestConvert_Typographer(t *testing.T) {
 		t.Fatalf("expected Paragraph, got %T", blocks[0])
 	}
 	text := runsText(p.Runs)
-	// Typographer should convert straight quotes to smart quotes and ... to ellipsis
-	if strings.Contains(text, `"hello"`) {
-		t.Errorf("expected typographer to convert straight quotes, got %q", text)
+
+	// Must not contain HTML entities (the bug we fixed)
+	htmlEntities := []string{"&ldquo;", "&rdquo;", "&lsquo;", "&rsquo;", "&hellip;", "&ndash;", "&mdash;"}
+	for _, ent := range htmlEntities {
+		if strings.Contains(text, ent) {
+			t.Errorf("text contains unresolved HTML entity %s: %q", ent, text)
+		}
 	}
-	if strings.Contains(text, "...") {
-		t.Errorf("expected typographer to convert ellipsis, got %q", text)
+
+	// Must contain actual Unicode characters
+	if !strings.Contains(text, "\u201c") { // left double quotation mark
+		t.Errorf("expected left double quote, got %q", text)
+	}
+	if !strings.Contains(text, "\u2026") { // ellipsis
+		t.Errorf("expected ellipsis, got %q", text)
+	}
+	if !strings.Contains(text, "\u2013") { // en-dash
+		t.Errorf("expected en-dash, got %q", text)
 	}
 }
