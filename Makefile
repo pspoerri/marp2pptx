@@ -1,7 +1,7 @@
 BINARY := marp2pptx
 MODULE := github.com/pspoerri/marp2pptx
 
-.PHONY: build test test-verbose test-integration lint fmt vet clean run install-hooks eval eval-lint
+.PHONY: build test test-verbose test-integration lint fmt vet clean run install install-hooks eval eval-lint
 
 build:
 	go build -o $(BINARY) .
@@ -67,6 +67,12 @@ eval-lint-all: build
 	go run ./cmd/pptxeval -lint testdata/sample.pptx
 	go run ./cmd/pptxeval -lint testdata/extensions.pptx
 	go run ./cmd/pptxeval -lint testdata/mermaid.pptx
+
+install: build
+	mkdir -p $(HOME)/.local/bin
+	cp $(BINARY) $(HOME)/.local/bin/$(BINARY)
+	mkdir -p $(HOME)/.config/opencode/skills/marp2pptx
+	cp SKILL.md $(HOME)/.config/opencode/skills/marp2pptx/SKILL.md
 
 install-hooks:
 	git config core.hooksPath githooks
