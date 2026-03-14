@@ -25,6 +25,12 @@ type TemplateData struct {
 	// Slide size from the template
 	slideSizeXML string
 
+	// Default text style from the template's presentation.xml
+	defaultTextStyleXML string
+
+	// Presentation element attributes (e.g. saveSubsetFonts, autoCompressPictures)
+	presentationAttrs string
+
 	// Original [Content_Types].xml bytes (for preserving all part overrides)
 	origContentTypes []byte
 
@@ -109,9 +115,12 @@ func LoadTemplate(path string) (*TemplateData, error) {
 	}
 	td.selectLayouts(layoutInfos)
 
-	// Parse presentation.xml for slide size
+	// Parse presentation.xml for slide size, default text style, and attributes
 	if presXML, ok := allFiles["ppt/presentation.xml"]; ok {
-		td.slideSizeXML = extractSlideSizeXML(string(presXML))
+		presStr := string(presXML)
+		td.slideSizeXML = extractSlideSizeXML(presStr)
+		td.defaultTextStyleXML = extractDefaultTextStyleXML(presStr)
+		td.presentationAttrs = extractPresentationAttrs(presStr)
 	}
 
 	// Parse presentation.xml.rels for non-slide relationships
@@ -446,6 +455,8 @@ const slideMasterRelType = "http://schemas.openxmlformats.org/officeDocument/200
 // presentationXML generates presentation.xml with properly coordinated rIds.
 // The master rId references are computed from the position of slideMaster entries
 // in nonSlideRels, matching the IDs assigned in presentationRelsXML.
+const notesMasterRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster"
+
 func (t *TemplateData) presentationXML(slideCount int) string {
 	var sldIdLst strings.Builder
 	for i := 1; i <= slideCount; i++ {
@@ -466,21 +477,43 @@ func (t *TemplateData) presentationXML(slideCount int) string {
 	}
 	masterList.WriteString("  </p:sldMasterIdLst>")
 
+	// Build notesMasterIdLst if template has a notesMaster relationship
+	var notesMasterLst string
+	for i, rel := range t.nonSlideRels {
+		if rel.Type == notesMasterRelType {
+			newRId := slideCount + 1 + i
+			notesMasterLst = fmt.Sprintf("\n  <p:notesMasterIdLst><p:notesMasterId r:id=\"rId%d\"/></p:notesMasterIdLst>", newRId)
+			break
+		}
+	}
+
 	sizeXML := t.slideSizeXML
 	if sizeXML == "" {
 		sizeXML = fmt.Sprintf("<p:sldSz cx=\"%d\" cy=\"%d\"/>\n  <p:notesSz cx=\"%d\" cy=\"%d\"/>",
 			slideWidth, slideHeight, slideWidth, slideHeight)
 	}
 
+	// Include default text style if present in the template
+	defaultTextStyle := ""
+	if t.defaultTextStyleXML != "" {
+		defaultTextStyle = "\n  " + t.defaultTextStyleXML
+	}
+
+	// Include presentation attributes from the template
+	presAttrs := ""
+	if t.presentationAttrs != "" {
+		presAttrs = " " + t.presentationAttrs
+	}
+
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
                 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-                xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"%s>
   %s
   <p:sldIdLst>
-%s  </p:sldIdLst>
-  %s
-</p:presentation>`, masterList.String(), sldIdLst.String(), sizeXML)
+%s  </p:sldIdLst>%s
+  %s%s
+</p:presentation>`, presAttrs, masterList.String(), sldIdLst.String(), notesMasterLst, sizeXML, defaultTextStyle)
 }
 
 // presentationRelsXML generates presentation.xml.rels combining our slides with template rels.
@@ -559,6 +592,8 @@ func readZipEntry(f *zip.File) ([]byte, error) {
 
 var sldSzRe = regexp.MustCompile(`<p:sldSz[^/]*/?>`)
 var notesSzRe = regexp.MustCompile(`<p:notesSz[^/]*/?>`)
+var defaultTextStyleRe = regexp.MustCompile(`<p:defaultTextStyle>[\s\S]*?</p:defaultTextStyle>`)
+var presAttrsRe = regexp.MustCompile(`<p:presentation\b[^>]*>`)
 
 func extractSlideSizeXML(xmlStr string) string {
 	sldSz := sldSzRe.FindString(xmlStr)
@@ -571,4 +606,22 @@ func extractSlideSizeXML(xmlStr string) string {
 		result += "\n  " + notesSz
 	}
 	return result
+}
+
+func extractDefaultTextStyleXML(xmlStr string) string {
+	return defaultTextStyleRe.FindString(xmlStr)
+}
+
+func extractPresentationAttrs(xmlStr string) string {
+	m := presAttrsRe.FindString(xmlStr)
+	if m == "" {
+		return ""
+	}
+	// Extract individual attributes we want to preserve
+	var attrs []string
+	attrRe := regexp.MustCompile(`\b(saveSubsetFonts|autoCompressPictures)="([^"]*)"`)
+	for _, am := range attrRe.FindAllStringSubmatch(m, -1) {
+		attrs = append(attrs, fmt.Sprintf(`%s="%s"`, am[1], am[2]))
+	}
+	return strings.Join(attrs, " ")
 }

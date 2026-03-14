@@ -390,16 +390,19 @@ func TestIntegration_PptxLint(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
+		args  []string // extra args before input
 	}{
-		{"sample", "testdata/sample.md"},
-		{"extensions", "testdata/extensions.md"},
-		{"mermaid", "testdata/mermaid.md"},
+		{"sample", "testdata/sample.md", nil},
+		{"extensions", "testdata/extensions.md", nil},
+		{"mermaid", "testdata/mermaid.md", nil},
+		{"darktheme", "testdata/sample.md", []string{"-theme", "testdata/darktheme.potx"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			outPath := filepath.Join(t.TempDir(), tt.name+".pptx")
-			output, err := runBinary(t, binary, "-o", outPath, tt.input)
+			args := append(tt.args, "-o", outPath, tt.input)
+			output, err := runBinary(t, binary, args...)
 			if err != nil {
 				t.Fatalf("conversion failed: %v\n%s", err, output)
 			}
@@ -413,5 +416,41 @@ func TestIntegration_PptxLint(t *testing.T) {
 				t.Errorf("lint failed for %s:\n%s", tt.name, out.String())
 			}
 		})
+	}
+}
+
+func TestIntegration_DarkTheme(t *testing.T) {
+	binary := requireBuild(t)
+	outPath := filepath.Join(t.TempDir(), "dark.pptx")
+
+	output, err := runBinary(t, binary, "-theme", "testdata/darktheme.potx", "-o", outPath, "testdata/sample.md")
+	if err != nil {
+		t.Fatalf("conversion failed: %v\n%s", err, output)
+	}
+
+	count := pptxSlideCount(t, outPath)
+	if count != 5 {
+		t.Errorf("expected 5 slides, got %d", count)
+	}
+
+	// Verify template theme is used (not built-in)
+	themeXML := pptxFileContent(t, outPath, "ppt/theme/theme1.xml")
+	if !strings.Contains(themeXML, "Calibri Light") {
+		t.Error("expected template theme with Calibri Light font")
+	}
+
+	// Verify template media files are preserved
+	mediaCount := pptxMediaCount(t, outPath)
+	if mediaCount < 10 {
+		t.Errorf("expected template media files to be preserved, got %d", mediaCount)
+	}
+
+	// Verify presentation.xml has defaultTextStyle from template
+	presXML := pptxFileContent(t, outPath, "ppt/presentation.xml")
+	if !strings.Contains(presXML, "<p:defaultTextStyle>") {
+		t.Error("expected defaultTextStyle from template in presentation.xml")
+	}
+	if !strings.Contains(presXML, "<p:notesMasterIdLst>") {
+		t.Error("expected notesMasterIdLst from template in presentation.xml")
 	}
 }
